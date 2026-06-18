@@ -51,16 +51,23 @@ These are **not** bundled in the binary.
 REPOSITORY_URL="https://github.com/owner/target-repo" \
 REPO_ACCESS_TOKEN="your-git-pat" \
 BRIGHT_TOKEN="your-bright-api-token" \
-OPENAI_API_KEY="your-openai-key" \
+INFERENCE_URL="https://api.openai.com/v1" \
+INFERENCE_TOKEN="your-inference-token" \
 ./bright-agent-linux-x64
 ```
 
-| Variable            | Required | Description                                              |
-| ------------------- | -------- | -------------------------------------------------------- |
-| `REPOSITORY_URL`    | **Yes**  | Repository to scan (GitHub or Azure DevOps, https form)  |
-| `REPO_ACCESS_TOKEN` | **Yes**  | Token that can clone, push branches, and open PRs        |
-| `BRIGHT_TOKEN`      | **Yes**  | Bright API token from https://app.brightsec.com          |
-| `OPENAI_API_KEY`    | Varies   | AI provider key (or `INFERENCE_TOKEN`)                   |
+| Variable            | Required | Description                                                                                  |
+| ------------------- | -------- | -------------------------------------------------------------------------------------------- |
+| `REPOSITORY_URL`    | **Yes**  | Repository to scan (GitHub or Azure DevOps, https form)                                      |
+| `REPO_ACCESS_TOKEN` | **Yes**  | Token that can clone, push branches, and open PRs                                            |
+| `BRIGHT_TOKEN`      | **Yes**  | Bright API token from https://app.brightsec.com                                              |
+| `INFERENCE_TOKEN`   | **Yes**  | API token for your inference endpoint                                                        |
+| `INFERENCE_URL`     | No       | Your OpenAI-compatible endpoint. Default: `https://api.openai.com/v1` (OpenAI). Also works with GitHub Models, Ollama, or a Bedrock-compatible gateway |
+| `AI_MODEL`          | No       | Model name or comma-separated escalation chain. Default: `gpt-5.4-mini`                      |
+
+Bring your own inference provider — anything exposing an **OpenAI-compatible
+API**. (If you use OpenAI directly you can also set `OPENAI_API_KEY` instead of
+`INFERENCE_TOKEN`.)
 
 The agent keeps the console quiet by default and writes a full, secret-redacted
 diagnostic log to `~/.bright-agent/logs/run-<timestamp>.log`. Set `BRIGHT_DEBUG=1`

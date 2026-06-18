@@ -47,8 +47,12 @@ Store these in your CI's secret manager — never commit them.
 | ------------------- | -------------------------------------------------------------- |
 | `BRIGHT_TOKEN`      | Bright API token from https://app.brightsec.com                |
 | `REPO_ACCESS_TOKEN` | Token that can clone, push branches, and open PRs on the repo  |
-| `OPENAI_API_KEY`    | AI provider key (or use `INFERENCE_TOKEN`)                     |
+| `INFERENCE_TOKEN`   | API token for your OpenAI-compatible inference endpoint        |
+| `INFERENCE_URL`     | That endpoint's base URL (OpenAI, GitHub Models, Ollama, a Bedrock-compatible gateway, …). Not secret — store as a CI variable |
 | `REPOSITORY_URL`    | The repository to scan (https form)                            |
+
+Bring your own inference provider — anything exposing an OpenAI-compatible API.
+If you use OpenAI directly, you may set `OPENAI_API_KEY` instead of `INFERENCE_TOKEN`.
 
 > **GitHub Actions:** you can skip the `REPO_ACCESS_TOKEN` PAT and use the
 > built-in `GITHUB_TOKEN` — set `REPO_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}`

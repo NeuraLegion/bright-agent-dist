@@ -10,8 +10,10 @@
 # Runner prerequisites: Docker, Docker Compose, Git (present on ubuntu-latest).
 #
 # Required repository secrets:
-#     BRIGHT_TOKEN     Bright API token from https://app.brightsec.com
-#     OPENAI_API_KEY   AI provider key (or swap for INFERENCE_TOKEN)
+#     BRIGHT_TOKEN      Bright API token from https://app.brightsec.com
+#     INFERENCE_TOKEN   API token for your OpenAI-compatible inference endpoint
+#   and one repository variable:
+#     INFERENCE_URL     that endpoint's base URL (OpenAI, GitHub Models, Ollama, …)
 #
 # Repo access uses the built-in GITHUB_TOKEN (see the `permissions:` block).
 
@@ -72,7 +74,9 @@ jobs:
           REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
           REPO_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRIGHT_TOKEN: ${{ secrets.BRIGHT_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Your own OpenAI-compatible inference endpoint + token:
+          INFERENCE_URL: ${{ vars.INFERENCE_URL }}
+          INFERENCE_TOKEN: ${{ secrets.INFERENCE_TOKEN }}
           RUN_MODE: validation
           # CodeQL writes "<language>.sarif" into the output dir above:
           SARIF_PATH: ${{ github.workspace }}/sarif-results/${{ env.CODEQL_LANGUAGE }}.sarif

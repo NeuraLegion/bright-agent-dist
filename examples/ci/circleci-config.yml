@@ -15,7 +15,7 @@
 # (Project Settings → Environment Variables) or via a Context:
 #     BRIGHT_TOKEN        Bright API token from https://app.brightsec.com
 #     REPO_ACCESS_TOKEN   PAT that can clone, push branches, and open PRs
-#     OPENAI_API_KEY      AI provider key (or swap for INFERENCE_TOKEN)
+#     INFERENCE_TOKEN     API token for your OpenAI-compatible inference endpoint
 
 version: 2.1
 
@@ -29,6 +29,8 @@ jobs:
       ASSET: bright-agent-linux-x64
       # The repository to scan (https form). Adjust to your repo:
       REPOSITORY_URL: https://github.com/your-org/your-repo
+      # Your OpenAI-compatible inference endpoint (the token is a project secret):
+      INFERENCE_URL: https://api.openai.com/v1
     steps:
       - run:
           name: Download & verify Bright Agent
@@ -40,7 +42,7 @@ jobs:
             chmod +x "${ASSET}"
       - run:
           name: Run Bright Agent
-          # BRIGHT_TOKEN, REPO_ACCESS_TOKEN, OPENAI_API_KEY are injected from
+          # BRIGHT_TOKEN, REPO_ACCESS_TOKEN, INFERENCE_TOKEN are injected from
           # the project's environment variables / context.
           command: ./${ASSET}
 
