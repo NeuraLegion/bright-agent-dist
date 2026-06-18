@@ -71,6 +71,7 @@ to mirror it to the console.
 Ready-to-copy pipeline templates live in [`examples/ci/`](./examples/ci/):
 
 - [GitHub Actions](./examples/ci/github-actions.yml)
+- [GitHub Actions — CodeQL SARIF validation](./examples/ci/github-actions-codeql-validation.yml)
 - [CircleCI](./examples/ci/circleci-config.yml)
 - [Jenkins](./examples/ci/Jenkinsfile)
 

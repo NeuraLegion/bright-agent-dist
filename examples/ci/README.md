@@ -6,11 +6,20 @@ example downloads the prebuilt binary from
 verifies its checksum, and runs a scan against your repository. The agent opens
 a pull request with verified fixes.
 
-| Platform       | File                                           |
-| -------------- | ---------------------------------------------- |
-| GitHub Actions | [`github-actions.yml`](./github-actions.yml)   |
-| CircleCI       | [`circleci-config.yml`](./circleci-config.yml) |
-| Jenkins        | [`Jenkinsfile`](./Jenkinsfile)                 |
+| Platform                       | File                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------- |
+| GitHub Actions                 | [`github-actions.yml`](./github-actions.yml)                                     |
+| GitHub Actions — CodeQL validation | [`github-actions-codeql-validation.yml`](./github-actions-codeql-validation.yml) |
+| CircleCI                       | [`circleci-config.yml`](./circleci-config.yml)                                   |
+| Jenkins                        | [`Jenkinsfile`](./Jenkinsfile)                                                   |
+
+### Modes
+
+The default examples run the full **scan → fix → validate** loop and open a PR
+with fixes. The **CodeQL validation** example instead runs `RUN_MODE=validation`:
+it takes a CodeQL SARIF file and confirms which static findings are actually
+exploitable against the live app (no fix loop), posting a CodeQL → DAST summary
+to a PR.
 
 ## How it works
 
