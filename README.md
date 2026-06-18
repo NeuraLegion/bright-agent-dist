@@ -48,22 +48,29 @@ These are **not** bundled in the binary.
 ## Run
 
 ```bash
-REPOSITORY_URL="https://github.com/owner/target-repo" \
+# Run from inside a checkout of the repo you want to scan
+# (LOCAL_REPO_PATH defaults to the current directory):
+cd /path/to/your/repo-checkout
 REPO_ACCESS_TOKEN="your-git-pat" \
 BRIGHT_TOKEN="your-bright-api-token" \
 INFERENCE_URL="https://api.openai.com/v1" \
 INFERENCE_TOKEN="your-inference-token" \
-./bright-agent-linux-x64
+/path/to/bright-agent-linux-x64
 ```
 
 | Variable            | Required | Description                                                                                  |
 | ------------------- | -------- | -------------------------------------------------------------------------------------------- |
-| `REPOSITORY_URL`    | **Yes**  | Repository to scan (GitHub or Azure DevOps, https form)                                      |
-| `REPO_ACCESS_TOKEN` | **Yes**  | Token that can clone, push branches, and open PRs                                            |
+| `LOCAL_REPO_PATH`   | No       | Path to the checked-out repo to scan. Defaults to the current directory. Bright Agent runs against this working copy — it does not clone |
+| `REPO_ACCESS_TOKEN` | **Yes**  | Token that can push branches and open PRs                                                    |
 | `BRIGHT_TOKEN`      | **Yes**  | Bright API token from https://app.brightsec.com                                              |
 | `INFERENCE_TOKEN`   | **Yes**  | API token for your inference endpoint                                                        |
 | `INFERENCE_URL`     | No       | Your OpenAI-compatible endpoint. Default: `https://api.openai.com/v1` (OpenAI). Also works with GitHub Models, Ollama, or a Bedrock-compatible gateway |
+| `REPOSITORY_URL`    | No       | Repo identity for the PR. Derived from the checkout's `origin` remote if omitted             |
 | `AI_MODEL`          | No       | Model name or comma-separated escalation chain. Default: `gpt-5.4-mini`                      |
+
+Bring your own inference provider — anything exposing an **OpenAI-compatible
+API**. (If you use OpenAI directly you can also set `OPENAI_API_KEY` instead of
+`INFERENCE_TOKEN`.)
 
 Bring your own inference provider — anything exposing an **OpenAI-compatible
 API**. (If you use OpenAI directly you can also set `OPENAI_API_KEY` instead of
