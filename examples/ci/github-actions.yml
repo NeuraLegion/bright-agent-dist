@@ -1,14 +1,22 @@
-# Bright Agent — GitHub Actions example
+# Bright Agent — GitHub Actions example (single workflow, all triggers)
 #
 # Copy this to `.github/workflows/bright-agent.yml` in YOUR application repo.
-# It checks out your repo, runs Bright Agent against that working copy, and
-# opens a pull request with verified fixes. (Bright Agent no longer clones —
-# it operates on the checked-out tree.)
+# One workflow drives the agent on every entry point:
 #
-# Scans are resource-intensive, so this runs on-demand and on a nightly
-# schedule — not on every push.
+#   • pull_request      → PR-scoped scan; reacts INTO the PR (commits fixes to
+#                         its head branch, sticky comment, "Bright Agent" status).
+#   • issue_comment     → a repo OWNER / MEMBER / COLLABORATOR comments
+#                         `/bright-agent <guidance>` (lowercase) on a PR; re-runs
+#                         that PR with the guidance routed to the right phase.
+#                         (See "Steering" below.)
+#   • workflow_dispatch → manual full scan.
+#   • schedule          → nightly full scan.
 #
-# Runner prerequisites: Docker, Docker Compose, Git (all present on
+# The agent adapts to the trigger from its environment; the workflow just feeds
+# the right inputs. Steering inputs are populated ONLY for a `/bright-agent`
+# comment and are empty otherwise (so other triggers run a normal scan).
+#
+# Runner prerequisites: Docker, Docker Compose, Git, curl, sha256sum (all on
 # GitHub-hosted `ubuntu-latest`; self-hosted runners must provide them).
 #
 # Required repository secrets:
@@ -17,33 +25,103 @@
 #   and one repository variable:
 #     INFERENCE_URL     that endpoint's base URL (OpenAI, GitHub Models, Ollama, …)
 #
-# Repo access uses the built-in GITHUB_TOKEN (see the `permissions:` block).
+# Repo access uses the built-in GITHUB_TOKEN (see `permissions:`).
+#
+# IMPORTANT for steering: GitHub only triggers `issue_comment` workflows from
+# the file on your repo's DEFAULT branch — so this workflow must be merged to
+# the default branch for `/bright-agent` replies to work.
 
 name: Bright Agent (DAST)
 
 on:
-  workflow_dispatch: {} # manual trigger
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch: {}
   schedule:
     - cron: "0 3 * * *" # nightly at 03:00 UTC
 
+# contents: write     → commit fixes onto the (PR head or scan) branch
+# pull-requests: write → open/update the PR + summary comment + reactions
+# statuses: write     → set the "Bright Agent" commit status
 permissions:
   contents: write
   pull-requests: write
+  statuses: write
+
+# One run per PR (its scan + any /bright-agent replies); else per ref.
+concurrency:
+  group: bright-agent-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   bright-agent:
+    # Trigger gates:
+    #  • pull_request : same-repo PRs only (GITHUB_TOKEN is read-only on forks,
+    #                   so the agent couldn't push fixes or comment anyway).
+    #  • issue_comment: a lowercase `/bright-agent` comment from a repo
+    #                   OWNER / MEMBER / COLLABORATOR on a PR.
+    #  • dispatch/schedule: always.
+    if: >-
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '/bright-agent') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule'
     runs-on: ubuntu-latest
     env:
       # Runner platform/arch: linux-x64 | linux-arm64 | darwin-x64 | darwin-arm64
       ASSET: bright-agent-linux-x64
     steps:
-      # Check out the repo to scan. fetch-depth: 2 gives a parent commit for diffs.
+      # For a `/bright-agent` comment: resolve the PR over the API and REFUSE
+      # fork PRs BEFORE any checkout. issue_comment runs in the base-repo context
+      # with secrets in scope, so checking out and running a fork's head would
+      # leak them. Outputs the head/base refs the run binds to.
+      - name: Resolve steering PR (refuse forks)
+        id: steer
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const sameRepo =
+              pr.head.repo &&
+              pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
+            if (!sameRepo) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body:
+                  "🔒 `/bright-agent` steering is not available on fork PRs for " +
+                  "security reasons (it would run untrusted code with repository " +
+                  "secrets). Push the branch to this repository to use it.",
+              });
+              core.setFailed("Steering disabled on fork PRs.");
+              return;
+            }
+            core.setOutput("head_ref", pr.head.ref);
+            core.setOutput("base_ref", pr.base.ref);
+
+      # Check out the tree to scan. PR / steering → the PR head branch (so fixes
+      # commit back to it); manual / schedule → the triggering ref. Download the
+      # binary OUTSIDE this checkout so it's never swept into a fix commit.
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 2
+          ref: >-
+            ${{ (github.event_name == 'issue_comment' && steps.steer.outputs.head_ref)
+              || (github.event_name == 'pull_request' && github.event.pull_request.head.ref)
+              || github.ref }}
+          fetch-depth: 0
 
-      # Download the binary OUTSIDE the checkout ($RUNNER_TEMP) so it is never
-      # swept into the fix commit (the agent commits with `git add -A`).
       - name: Download & verify Bright Agent
         working-directory: ${{ runner.temp }}
         run: |
@@ -62,17 +140,23 @@ jobs:
           LOCAL_REPO_PATH: ${{ github.workspace }}
           REPO_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRIGHT_TOKEN: ${{ secrets.BRIGHT_TOKEN }}
-          # Your own OpenAI-compatible inference endpoint + token:
           INFERENCE_URL: ${{ vars.INFERENCE_URL }}
           INFERENCE_TOKEN: ${{ secrets.INFERENCE_TOKEN }}
+          # Steering inputs — populated only for a `/bright-agent` comment; empty
+          # for every other trigger, so the agent runs a normal scan.
+          BRIGHT_STEERING_COMMENT: ${{ github.event_name == 'issue_comment' && github.event.comment.body || '' }}
+          BRIGHT_STEERING_COMMENT_ID: ${{ github.event_name == 'issue_comment' && github.event.comment.id || '' }}
+          BRIGHT_STEERING_AUTHOR: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login || '' }}
+          BRIGHT_STEERING_AUTHOR_ASSOCIATION: ${{ github.event_name == 'issue_comment' && github.event.comment.author_association || '' }}
+          BRIGHT_STEERING_PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || '' }}
+          BRIGHT_STEERING_PR_HEAD: ${{ steps.steer.outputs.head_ref }}
+          BRIGHT_STEERING_PR_BASE: ${{ steps.steer.outputs.base_ref }}
           # Optional:
           # AI_MODEL: gpt-5.4-mini
-          # RUN_MODE: full
-          # BRIGHT_HOSTNAME: app.brightsec.com
+          # SCAN_SCOPE: full      # force a full-repo scan even on a PR
           # BRIGHT_DEBUG: "1"
         run: "${{ runner.temp }}/${{ env.ASSET }}"
 
-# NOTE: PRs and pushes made with GITHUB_TOKEN do not trigger your other
-# workflows (GitHub's anti-recursion rule). If you need the fix PR to run your
-# repo's CI checks, create a PAT secret and use it instead, e.g.:
-#     REPO_ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+# NOTE: commits/PRs/comments made with GITHUB_TOKEN do not trigger your other
+# workflows (GitHub's anti-recursion rule). To have fix commits re-run your
+# repo's CI, use a PAT instead: REPO_ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}

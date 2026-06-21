@@ -15,11 +15,40 @@ with verified fixes.
 
 ### Modes
 
-The default examples run the full **scan → fix → validate** loop and open a PR
-with fixes. The **CodeQL validation** example instead runs `RUN_MODE=validation`:
-it takes a CodeQL SARIF file and confirms which static findings are actually
-exploitable against the live app (no fix loop), posting a CodeQL → DAST summary
-to a PR.
+The **GitHub Actions** example is a single workflow that drives the agent on
+every entry point — manual (`workflow_dispatch`), nightly (`schedule`),
+`pull_request`, and `issue_comment` (`/bright-agent` steering). The other
+platforms (CircleCI, Jenkins) run the manual/scheduled scan; comment-based
+steering is GitHub-specific. The **CodeQL validation** example instead runs
+`RUN_MODE=validation`: it takes a CodeQL SARIF file and confirms which static
+findings are actually exploitable against the live app (no fix loop), posting a
+CodeQL → DAST summary to a PR.
+
+**On a pull request**, the same full run is narrowed to the PR's diff: it scans
+only the endpoints affected by the changed code, **bails immediately on a
+docs-only PR**, and reacts into the PR it's testing — committing fixes to the
+PR's head branch, posting a sticky summary comment, and setting a `Bright Agent`
+commit status (**“Marked Safe by Bright Agent”** when nothing is left open).
+Force a full-repo scan with `SCAN_SCOPE=full`.
+
+**Steering (`/bright-agent`).** When a run can't finish (e.g. the app won't boot
+without a value it can't guess), it posts a PR comment explaining why and
+inviting a reply. A user whose GitHub `author_association` on the repo is
+**OWNER, MEMBER, or COLLABORATOR** comments `/bright-agent <guidance>`
+(lowercase) — e.g. `/bright-agent set AZURE_CLIENT_REDIRECT_URI=https://…` — and
+the workflow re-runs that PR with the guidance routed to the relevant phase.
+Notes:
+
+- The workflow must be on your repo's **default branch** — GitHub only triggers
+  `issue_comment` from there.
+- The marker is **lowercase `/bright-agent`** and may appear at the start of the
+  comment or after other text/newlines. (GitHub Actions `if:` expressions can't
+  match case-insensitively, so a different casing won't trigger the workflow.)
+- Only **OWNER / MEMBER / COLLABORATOR** comments are honored (the steering text
+  becomes agent instructions), and **fork PRs are refused** before checkout so
+  untrusted code never runs with your secrets.
+- It needs `pull-requests: write` and `statuses: write` in addition to
+  `contents: write` (all in the example's `permissions:` block).
 
 ## How it works
 
