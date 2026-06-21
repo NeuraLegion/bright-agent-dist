@@ -56,16 +56,22 @@ Notes:
 - It needs `pull-requests: write` and `statuses: write` in addition to
   `contents: write` (all in the example's `permissions:` block).
 
-On **Azure DevOps**, steering works the same way, with two platform differences:
-there's no native PR-comment trigger (wire an Azure DevOps **Service Hook** on
-"Pull request commented on" that runs the pipeline with the `steering*`
-parameters — see [`azure-pipelines.yml`](./azure-pipelines.yml)), and Azure has
-no `author_association`, so the **service hook is the trust boundary** — only
-forward `/bright-agent` comments from authorized users and set the role to
-`MEMBER`. The agent reacts identically (fix commits, a single summary comment
-thread, and a `Bright Agent` commit status). The `REPO_ACCESS_TOKEN` PAT needs
-Code (Read & Write), Pull Request Threads (Read & Write), and Code Status
-(Read & Write).
+On **Azure DevOps**, steering works the same way, with two platform differences.
+First, there's no native PR-comment trigger — wire an Azure DevOps **Service
+Hook** on "Pull request commented on" that runs the pipeline with the
+`steering*` parameters (see [`azure-pipelines.yml`](./azure-pipelines.yml)).
+Second, Azure has no `author_association`, so the **service hook is the trust
+boundary** — only forward `/bright-agent` comments from authorized users and set
+the role to `MEMBER`. The agent reacts identically (fix commits, a single
+summary comment thread, and a `Bright Agent` commit status). For repo access the
+example uses the **built-in `System.AccessToken`** (the Azure equivalent of
+GitHub's `GITHUB_TOKEN` — no PAT to create; grant the project's *Build Service*
+account Contribute / Contribute to pull requests / status permissions). The
+agent auto-detects the token type (OAuth → Bearer, PAT → Basic). To use a PAT
+instead, it needs Code (Read & Write), Pull Request Threads (Read & Write), and
+Code Status (Read & Write) — and note that, like `GITHUB_TOKEN`, fixes pushed
+with `System.AccessToken` won't trigger your other pipelines (use a PAT if you
+need that).
 
 ## How it works
 

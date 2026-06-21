@@ -14,19 +14,27 @@
 #                           scan to the PR diff automatically — the agent reads
 #                           the predefined System.PullRequest.TargetBranch.
 #   • `/bright-agent`     → comment steering. Azure has no native PR-comment
-#     comment steering       pipeline trigger, so wire a SERVICE HOOK (see
-#                            "Steering" at the bottom) that runs this pipeline
-#                            with the steering.* parameters filled in.
+#                           trigger, so wire a SERVICE HOOK (see "Steering" at
+#                           the bottom) that runs this pipeline with the
+#                           steering.* parameters filled in.
 #
 # Hosted-agent prerequisites: Docker, Docker Compose, Git, curl, sha256sum —
 # all present on the `ubuntu-latest` image.
 #
+# Repo access — this example uses the pipeline's BUILT-IN token,
+# `System.AccessToken` (no PAT to create — the Azure equivalent of GitHub's
+# GITHUB_TOKEN). The agent auto-detects the token type (OAuth → Bearer,
+# PAT → Basic). For the built-in token to push fixes, manage the PR, comment,
+# and set status, grant the "<Project> Build Service (<org>)" account these
+# permissions under Project Settings → Repositories → your repo → Security:
+# Contribute, Contribute to pull requests, plus Create/Edit (commit) status.
+#   Caveat: like GITHUB_TOKEN, commits made with System.AccessToken do NOT
+#   trigger your other pipelines. If you need the fix push to re-run CI, create
+#   a PAT (Code R&W + Pull Request Threads R&W + Code Status R&W), store it as a
+#   secret variable REPO_ACCESS_TOKEN, and set it on the run step instead.
+#
 # Required pipeline variables (Edit pipeline → Variables; tick "Keep secret"):
 #     BRIGHT_TOKEN      (secret)  Bright API token from https://app.brightsec.com
-#     REPO_ACCESS_TOKEN (secret)  Azure DevOps PAT with scopes:
-#                                   Code (Read & Write),
-#                                   Pull Request Threads (Read & Write),
-#                                   Code Status (Read & Write)
 #     INFERENCE_TOKEN   (secret)  Token for your OpenAI-compatible endpoint
 #     INFERENCE_URL               That endpoint's base URL (OpenAI / Ollama / …)
 
@@ -100,7 +108,9 @@ steps:
       # predefined Build.Repository.Uri (platform auto-detected as Azure DevOps).
       LOCAL_REPO_PATH: $(Build.SourcesDirectory)
       REPOSITORY_URL: $(Build.Repository.Uri)
-      REPO_ACCESS_TOKEN: $(REPO_ACCESS_TOKEN)
+      # Built-in pipeline token (like GitHub's GITHUB_TOKEN). To use a PAT
+      # instead, set this to $(REPO_ACCESS_TOKEN) and define that secret var.
+      REPO_ACCESS_TOKEN: $(System.AccessToken)
       BRIGHT_TOKEN: $(BRIGHT_TOKEN)
       INFERENCE_URL: $(INFERENCE_URL)
       INFERENCE_TOKEN: $(INFERENCE_TOKEN)
