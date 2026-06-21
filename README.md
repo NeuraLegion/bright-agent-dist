@@ -86,14 +86,16 @@ Ready-to-copy pipeline templates live in [`examples/ci/`](./examples/ci/):
 
 - [GitHub Actions](./examples/ci/github-actions.yml)
 - [GitHub Actions — CodeQL SARIF validation](./examples/ci/github-actions-codeql-validation.yml)
+- [Azure Pipelines](./examples/ci/azure-pipelines.yml)
 - [CircleCI](./examples/ci/circleci-config.yml)
 - [Jenkins](./examples/ci/Jenkinsfile)
 
-The GitHub Actions template is a single workflow covering manual/nightly scans,
-**pull-request-scoped** runs (reacts into the PR with fixes + a status), and
+The GitHub Actions and Azure Pipelines templates cover manual/nightly scans,
+**pull-request-scoped** runs (reacting into the PR with fixes + a status), and
 **`/bright-agent` comment steering** — re-run a PR with guidance when a scan
-can't finish. See [`examples/ci/README.md`](./examples/ci/README.md) for required
-secrets and runner notes. Run scans on a schedule or on demand — not on every push.
+can't finish (on Azure Repos via a Build Validation policy + a Service Hook).
+See [`examples/ci/README.md`](./examples/ci/README.md) for required secrets and
+runner notes. Run scans on a schedule or on demand — not on every push.
 
 ## Links
 

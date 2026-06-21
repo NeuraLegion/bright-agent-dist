@@ -10,6 +10,7 @@ with verified fixes.
 | ------------------------------ | -------------------------------------------------------------------------------- |
 | GitHub Actions                 | [`github-actions.yml`](./github-actions.yml)                                     |
 | GitHub Actions — CodeQL validation | [`github-actions-codeql-validation.yml`](./github-actions-codeql-validation.yml) |
+| Azure Pipelines                | [`azure-pipelines.yml`](./azure-pipelines.yml)                                   |
 | CircleCI                       | [`circleci-config.yml`](./circleci-config.yml)                                   |
 | Jenkins                        | [`Jenkinsfile`](./Jenkinsfile)                                                   |
 
@@ -17,12 +18,17 @@ with verified fixes.
 
 The **GitHub Actions** example is a single workflow that drives the agent on
 every entry point — manual (`workflow_dispatch`), nightly (`schedule`),
-`pull_request`, and `issue_comment` (`/bright-agent` steering). The other
-platforms (CircleCI, Jenkins) run the manual/scheduled scan; comment-based
-steering is GitHub-specific. The **CodeQL validation** example instead runs
-`RUN_MODE=validation`: it takes a CodeQL SARIF file and confirms which static
-findings are actually exploitable against the live app (no fix loop), posting a
-CodeQL → DAST summary to a PR.
+`pull_request`, and `issue_comment` (`/bright-agent` steering). The **Azure
+Pipelines** example reaches the same parity on Azure Repos — scheduled/manual,
+PR-scoped runs (via a Build Validation branch policy), and `/bright-agent`
+steering (via an Azure DevOps Service Hook, since Azure has no native
+PR-comment trigger); the agent's PR reaction (fix commits, sticky comment,
+commit status) works on Azure DevOps just like GitHub. The other platforms
+(CircleCI, Jenkins) run the manual/scheduled scan; comment-based steering there
+would need equivalent webhook plumbing. The **CodeQL validation** example
+instead runs `RUN_MODE=validation`: it takes a CodeQL SARIF file and confirms
+which static findings are actually exploitable against the live app (no fix
+loop), posting a CodeQL → DAST summary to a PR.
 
 **On a pull request**, the same full run is narrowed to the PR's diff: it scans
 only the endpoints affected by the changed code, **bails immediately on a
@@ -50,6 +56,17 @@ Notes:
 - It needs `pull-requests: write` and `statuses: write` in addition to
   `contents: write` (all in the example's `permissions:` block).
 
+On **Azure DevOps**, steering works the same way, with two platform differences:
+there's no native PR-comment trigger (wire an Azure DevOps **Service Hook** on
+"Pull request commented on" that runs the pipeline with the `steering*`
+parameters — see [`azure-pipelines.yml`](./azure-pipelines.yml)), and Azure has
+no `author_association`, so the **service hook is the trust boundary** — only
+forward `/bright-agent` comments from authorized users and set the role to
+`MEMBER`. The agent reacts identically (fix commits, a single summary comment
+thread, and a `Bright Agent` commit status). The `REPO_ACCESS_TOKEN` PAT needs
+Code (Read & Write), Pull Request Threads (Read & Write), and Code Status
+(Read & Write).
+
 ## How it works
 
 The CI job **checks out your repository** (e.g. `actions/checkout`), downloads
@@ -72,8 +89,9 @@ need to set it.
 - **Git** — to check out the repo and push the fix branch
 - **curl** + **sha256sum** — to fetch and verify the binary
 
-GitHub-hosted `ubuntu-latest` and the CircleCI `ubuntu-2404` machine image
-include all of these. Self-hosted runners and Jenkins nodes must provide them.
+GitHub-hosted `ubuntu-latest`, the Azure Pipelines `ubuntu-latest` image, and
+the CircleCI `ubuntu-2404` machine image include all of these. Self-hosted
+runners and Jenkins nodes must provide them.
 
 > **CircleCI:** use the `machine` executor (a full VM). The `docker` executor
 > with remote Docker can't reach the app on `localhost`, so scanning fails.

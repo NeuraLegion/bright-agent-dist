@@ -1,0 +1,157 @@
+# Bright Agent — Azure Pipelines example (Azure Repos Git)
+#
+# Copy this to `azure-pipelines.yml` in YOUR application repo and create a
+# pipeline from it (Pipelines → New pipeline → Azure Repos Git → Existing YAML).
+#
+# Triggers — Azure Pipelines differs from GitHub Actions here:
+#   • schedule / manual  → declared below (nightly + "Run pipeline").
+#   • pull request        → Azure Repos does NOT honor the YAML `pr:` trigger
+#                           (that key only works for GitHub-hosted repos). Add
+#                           this pipeline as a BUILD VALIDATION branch policy:
+#                           Project Settings → Repositories → your repo →
+#                           Policies → (default branch) → Build Validation →
+#                           "+", pick this pipeline. PR builds then scope the
+#                           scan to the PR diff automatically — the agent reads
+#                           the predefined System.PullRequest.TargetBranch.
+#   • `/bright-agent`     → comment steering. Azure has no native PR-comment
+#     comment steering       pipeline trigger, so wire a SERVICE HOOK (see
+#                            "Steering" at the bottom) that runs this pipeline
+#                            with the steering.* parameters filled in.
+#
+# Hosted-agent prerequisites: Docker, Docker Compose, Git, curl, sha256sum —
+# all present on the `ubuntu-latest` image.
+#
+# Required pipeline variables (Edit pipeline → Variables; tick "Keep secret"):
+#     BRIGHT_TOKEN      (secret)  Bright API token from https://app.brightsec.com
+#     REPO_ACCESS_TOKEN (secret)  Azure DevOps PAT with scopes:
+#                                   Code (Read & Write),
+#                                   Pull Request Threads (Read & Write),
+#                                   Code Status (Read & Write)
+#     INFERENCE_TOKEN   (secret)  Token for your OpenAI-compatible endpoint
+#     INFERENCE_URL               That endpoint's base URL (OpenAI / Ollama / …)
+
+# Steering inputs arrive as runtime parameters (populated by the Service Hook
+# for a `/bright-agent` comment; empty for scheduled/manual/PR runs).
+parameters:
+  - name: steeringComment
+    type: string
+    default: ""
+  - name: steeringCommentId
+    type: string
+    default: ""
+  - name: steeringAuthor
+    type: string
+    default: ""
+  - name: steeringAuthorRole # must be OWNER / MEMBER / COLLABORATOR to be honored
+    type: string
+    default: ""
+  - name: steeringPrNumber
+    type: string
+    default: ""
+  - name: steeringPrHead
+    type: string
+    default: ""
+  - name: steeringPrBase
+    type: string
+    default: ""
+
+# Don't run on every push — drive the agent from the schedule, the PR build
+# validation policy, manual runs, and the steering service hook.
+trigger: none
+
+schedules:
+  - cron: "0 3 * * *" # nightly at 03:00 UTC
+    displayName: Nightly DAST
+    branches:
+      include:
+        - main
+    always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Hosted agent platform/arch: linux-x64 | linux-arm64 | darwin-x64 | darwin-arm64
+  ASSET: bright-agent-linux-x64
+
+steps:
+  # Check out the tree to scan with full history so PR diff-scoping works.
+  # persistCredentials lets the agent push fix commits back via git.
+  - checkout: self
+    fetchDepth: 0
+    persistCredentials: true
+
+  - script: |
+      set -eu
+      # Latest release. To pin a version, replace 'latest/download' with
+      # 'download/<tag>', e.g. .../releases/download/v0.1.1
+      base="https://github.com/NeuraLegion/bright-agent-dist/releases/latest/download"
+      cd "$(Agent.TempDirectory)"
+      curl -fsSL -o "$ASSET" "$base/$ASSET"
+      curl -fsSL -o "$ASSET.sha256" "$base/$ASSET.sha256"
+      sha256sum -c "$ASSET.sha256"
+      chmod +x "$ASSET"
+    displayName: Download & verify Bright Agent
+
+  - script: "$(Agent.TempDirectory)/$ASSET"
+    displayName: Run Bright Agent
+    env:
+      # Run against the checked-out tree. REPOSITORY_URL is taken from the
+      # predefined Build.Repository.Uri (platform auto-detected as Azure DevOps).
+      LOCAL_REPO_PATH: $(Build.SourcesDirectory)
+      REPOSITORY_URL: $(Build.Repository.Uri)
+      REPO_ACCESS_TOKEN: $(REPO_ACCESS_TOKEN)
+      BRIGHT_TOKEN: $(BRIGHT_TOKEN)
+      INFERENCE_URL: $(INFERENCE_URL)
+      INFERENCE_TOKEN: $(INFERENCE_TOKEN)
+      # Steering inputs — populated only when the Service Hook runs this pipeline
+      # for a `/bright-agent` comment; empty otherwise (so it runs a normal scan).
+      BRIGHT_STEERING_COMMENT: ${{ parameters.steeringComment }}
+      BRIGHT_STEERING_COMMENT_ID: ${{ parameters.steeringCommentId }}
+      BRIGHT_STEERING_AUTHOR: ${{ parameters.steeringAuthor }}
+      BRIGHT_STEERING_AUTHOR_ASSOCIATION: ${{ parameters.steeringAuthorRole }}
+      BRIGHT_STEERING_PR_NUMBER: ${{ parameters.steeringPrNumber }}
+      BRIGHT_STEERING_PR_HEAD: ${{ parameters.steeringPrHead }}
+      BRIGHT_STEERING_PR_BASE: ${{ parameters.steeringPrBase }}
+      # Optional:
+      # AI_MODEL: gpt-5.4-mini
+      # SCAN_SCOPE: full      # force a full-repo scan even on a PR
+      # BRIGHT_DEBUG: "1"
+
+# ---------------------------------------------------------------------------
+# Steering: `/bright-agent <guidance>` on a PR  (Azure DevOps Service Hook)
+# ---------------------------------------------------------------------------
+# Azure has no native "run pipeline on PR comment" trigger, so bridge it with a
+# Service Hook that calls the Pipelines REST API:
+#
+# 1. Project Settings → Service hooks → "+" → "Web Hooks".
+# 2. Trigger: "Pull request commented on" (optionally filter by target branch).
+# 3. Action: POST to the Runs API of THIS pipeline:
+#       https://dev.azure.com/{org}/{project}/_apis/pipelines/{pipelineId}/runs?api-version=7.1
+#    with a Basic-auth PAT (Build: Read & Execute) and a body that maps the
+#    event payload into the template parameters, e.g.:
+#       {
+#         "templateParameters": {
+#           "steeringComment":   "<comment.content>",
+#           "steeringCommentId": "<comment.id>",
+#           "steeringAuthor":    "<comment.author.displayName>",
+#           "steeringAuthorRole":"MEMBER",          // see authorization note
+#           "steeringPrNumber":  "<pullRequestId>",
+#           "steeringPrHead":    "<sourceRefName w/o refs/heads/>",
+#           "steeringPrBase":    "<targetRefName w/o refs/heads/>"
+#         }
+#       }
+#    (A tiny relay — Azure Function / Logic App — is the usual way to reshape the
+#    service-hook JSON into that body and only forward comments containing
+#    "/bright-agent".)
+#
+# Authorization: the agent only honors steering when steeringAuthorRole is
+# OWNER, MEMBER, or COLLABORATOR (case-insensitive). Azure DevOps has no
+# author_association, so the SERVICE HOOK is your trust boundary — only forward
+# comments from authorized users (e.g. gate on group membership in the relay)
+# and set steeringAuthorRole to "MEMBER" for them. Do NOT forward arbitrary
+# comments with an authorized role, or anyone could steer the agent.
+#
+# On a successful run the agent commits any fixes to the PR's source branch,
+# upserts a single summary comment thread, and sets a "Bright Agent" commit
+# status — the same reaction it performs on GitHub.
