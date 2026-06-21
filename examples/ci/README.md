@@ -11,6 +11,7 @@ with verified fixes.
 | GitHub Actions                 | [`github-actions.yml`](./github-actions.yml)                                     |
 | GitHub Actions — CodeQL validation | [`github-actions-codeql-validation.yml`](./github-actions-codeql-validation.yml) |
 | Azure Pipelines                | [`azure-pipelines.yml`](./azure-pipelines.yml)                                   |
+| GitLab CI/CD                   | [`.gitlab-ci.yml`](./.gitlab-ci.yml)                                             |
 | CircleCI                       | [`circleci-config.yml`](./circleci-config.yml)                                   |
 | Jenkins                        | [`Jenkinsfile`](./Jenkinsfile)                                                   |
 
@@ -23,7 +24,11 @@ Pipelines** example reaches the same parity on Azure Repos — scheduled/manual,
 PR-scoped runs (via a Build Validation branch policy), and `/bright-agent`
 steering (via an Azure DevOps Service Hook, since Azure has no native
 PR-comment trigger); the agent's PR reaction (fix commits, sticky comment,
-commit status) works on Azure DevOps just like GitHub. The other platforms
+commit status) works on Azure DevOps just like GitHub. The **GitLab CI/CD**
+example reaches the same parity on GitLab (gitlab.com or self-managed) —
+MR-scoped scans, scheduled/manual, and `/bright-agent` steering (via a comment
+webhook → pipeline trigger); on GitLab the agent even adds an award-emoji to the
+steering note, since GitLab notes support reactions. The other platforms
 (CircleCI, Jenkins) run the manual/scheduled scan; comment-based steering there
 would need equivalent webhook plumbing. The **CodeQL validation** example
 instead runs `RUN_MODE=validation`: it takes a CodeQL SARIF file and confirms
@@ -73,6 +78,18 @@ Code Status (Read & Write) — and note that, like `GITHUB_TOKEN`, fixes pushed
 with `System.AccessToken` won't trigger your other pipelines (use a PAT if you
 need that).
 
+On **GitLab**, steering also works the same way (gitlab.com or self-managed). As
+on Azure there's no native trigger on a comment, so wire a **webhook** on note
+events to a small relay that fires a **pipeline trigger** with the
+`BRIGHT_STEERING_*` variables (see [`.gitlab-ci.yml`](./.gitlab-ci.yml)). GitLab
+note webhooks don't carry the commenter's role, so the **relay is the trust
+boundary** — look up the member's access level and only forward Developer+
+comments (set the role to `MEMBER`). Repo access uses a **PAT or Project/Group
+Access Token** (`api` scope, Developer+) as `REPO_ACCESS_TOKEN` — `CI_JOB_TOKEN`
+can't create merge requests or notes. Uniquely, GitLab notes support reactions,
+so the agent adds an award-emoji to the steering note in addition to the sticky
+note + commit status.
+
 ## How it works
 
 The CI job **checks out your repository** (e.g. `actions/checkout`), downloads
@@ -101,6 +118,11 @@ runners and Jenkins nodes must provide them.
 
 > **CircleCI:** use the `machine` executor (a full VM). The `docker` executor
 > with remote Docker can't reach the app on `localhost`, so scanning fails.
+
+> **GitLab:** use a runner that runs Docker on its host (a shell executor on a
+> Docker host, or a `docker` executor with docker-in-docker set up so the app is
+> reachable). A plain `docker` executor without dind/networking can't reach the
+> app on `localhost`.
 
 ## Required secrets / environment variables
 

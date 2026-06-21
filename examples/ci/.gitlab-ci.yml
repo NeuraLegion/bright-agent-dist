@@ -1,0 +1,97 @@
+# Bright Agent — GitLab CI/CD example (GitLab.com or self-managed)
+#
+# Copy this to `.gitlab-ci.yml` in YOUR application repo. It checks out your
+# repo, runs Bright Agent against that working copy, and reacts into the merge
+# request (commits fixes to the source branch, a sticky summary note, a
+# "Bright Agent" commit status, and 👀/🚀 award-emoji on the steering note).
+#
+# Triggers (see `rules:` below):
+#   • Merge request  → MR-scoped scan, narrowed to the MR diff (the agent reads
+#                      the predefined CI_MERGE_REQUEST_TARGET_BRANCH_NAME).
+#   • Schedule       → nightly full scan (create one in CI/CD → Schedules).
+#   • Web / manual   → on-demand full scan ("Run pipeline").
+#   • Trigger        → `/bright-agent` comment steering, delivered by a webhook
+#                      relay (GitLab has no native "pipeline on MR comment"
+#                      trigger). See "Steering" at the bottom.
+#
+# Runner requirements: Docker, Docker Compose, Git, curl, sha256sum — AND the
+# started app must be reachable on localhost. Use a runner that runs Docker on
+# its host (a shell executor on a Docker host, or a docker executor with
+# docker-in-docker set up so the app is reachable). A plain docker executor
+# without dind/networking can't reach the app on localhost (same caveat as
+# CircleCI's docker executor — prefer a VM/shell runner).
+#
+# Required CI/CD variables (Settings → CI/CD → Variables — mask & protect):
+#   BRIGHT_TOKEN        Bright API token from https://app.brightsec.com
+#   REPO_ACCESS_TOKEN   GitLab PAT or Project/Group Access Token — scope `api`,
+#                       role Developer or higher. (CI_JOB_TOKEN can't create
+#                       merge requests or notes, so it is NOT sufficient.)
+#   INFERENCE_TOKEN     Token for your OpenAI-compatible endpoint
+#   INFERENCE_URL       That endpoint's base URL (OpenAI / Ollama / …)
+
+bright-agent:
+  stage: test
+  tags: [docker] # target a Docker-capable runner (adjust to your runner tags)
+  variables:
+    ASSET: bright-agent-linux-x64
+    GIT_DEPTH: "0" # full history so MR diff-scoping works
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "trigger" # steering, via the webhook relay
+  script:
+    - |
+      set -eu
+      # Latest release. To pin a version, replace 'latest/download' with
+      # 'download/<tag>', e.g. .../releases/download/v0.1.1
+      base="https://github.com/NeuraLegion/bright-agent-dist/releases/latest/download"
+      # Download OUTSIDE the checkout so the binary is never swept into a fix
+      # commit (the agent commits with `git add -A`).
+      tmp="$(mktemp -d)"
+      curl -fsSL -o "$tmp/$ASSET" "$base/$ASSET"
+      curl -fsSL -o "$tmp/$ASSET.sha256" "$base/$ASSET.sha256"
+      ( cd "$tmp" && sha256sum -c "$ASSET.sha256" )
+      chmod +x "$tmp/$ASSET"
+      # Run against the checkout. BRIGHT_TOKEN, REPO_ACCESS_TOKEN, INFERENCE_*
+      # come from CI/CD variables (already in the environment). Steering inputs
+      # (BRIGHT_STEERING_*) are injected by the webhook relay's trigger variables
+      # for a `/bright-agent` comment, and are absent otherwise (normal scan).
+      LOCAL_REPO_PATH="$CI_PROJECT_DIR" \
+      REPOSITORY_URL="$CI_PROJECT_URL" \
+      "$tmp/$ASSET"
+
+# ---------------------------------------------------------------------------
+# Steering: `/bright-agent <guidance>` on a merge request
+# ---------------------------------------------------------------------------
+# GitLab has no native "run pipeline on MR comment" trigger, so bridge it with a
+# webhook + pipeline trigger:
+#
+# 1. Create a pipeline trigger token: Settings → CI/CD → Pipeline trigger tokens.
+# 2. Add a webhook (Settings → Webhooks) on "Comments" (note events).
+# 3. Point it at a small relay (Function/Lambda/Cloud Run) that, for note events
+#    whose body contains "/bright-agent" FROM AN AUTHORIZED USER, calls:
+#       POST https://<gitlab-host>/api/v4/projects/<id>/trigger/pipeline
+#       form fields:
+#         token=<trigger token>
+#         ref=<MR source branch>            # so fixes land on the MR branch
+#         variables[BRIGHT_STEERING_COMMENT]=<note.body>
+#         variables[BRIGHT_STEERING_COMMENT_ID]=<note.id>
+#         variables[BRIGHT_STEERING_AUTHOR]=<user.username>
+#         variables[BRIGHT_STEERING_AUTHOR_ASSOCIATION]=MEMBER   # see note below
+#         variables[BRIGHT_STEERING_PR_NUMBER]=<merge_request.iid>
+#         variables[BRIGHT_STEERING_PR_HEAD]=<merge_request.source_branch>
+#         variables[BRIGHT_STEERING_PR_BASE]=<merge_request.target_branch>
+#    Those trigger variables arrive as environment variables in the job above
+#    (the `$CI_PIPELINE_SOURCE == "trigger"` rule lets it run).
+#
+# Authorization: the agent only honors steering when the author association is
+# OWNER, MEMBER, or COLLABORATOR (case-insensitive). GitLab note webhooks don't
+# include the commenter's project role, so the RELAY is your trust boundary:
+# look up the member's access level via the API and only forward (setting
+# BRIGHT_STEERING_AUTHOR_ASSOCIATION=MEMBER) for Developer+ users. Do NOT forward
+# arbitrary comments with an authorized role, or anyone could steer the agent.
+#
+# On a successful run the agent commits any fixes to the MR's source branch,
+# upserts a single summary note, sets a "Bright Agent" commit status, and adds an
+# award-emoji to the steering note — the same reaction it performs on GitHub.
