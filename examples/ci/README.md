@@ -12,6 +12,7 @@ with verified fixes.
 | GitHub Actions — CodeQL validation | [`github-actions-codeql-validation.yml`](./github-actions-codeql-validation.yml) |
 | Azure Pipelines                | [`azure-pipelines.yml`](./azure-pipelines.yml)                                   |
 | GitLab CI/CD                   | [`.gitlab-ci.yml`](./.gitlab-ci.yml)                                             |
+| Bitbucket Pipelines            | [`bitbucket-pipelines.yml`](./bitbucket-pipelines.yml)                           |
 | CircleCI                       | [`circleci-config.yml`](./circleci-config.yml)                                   |
 | Jenkins                        | [`Jenkinsfile`](./Jenkinsfile)                                                   |
 

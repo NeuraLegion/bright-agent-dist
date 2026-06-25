@@ -1,0 +1,127 @@
+# Bright Agent — Bitbucket Pipelines example (Bitbucket Cloud)
+#
+# Copy this to `bitbucket-pipelines.yml` in YOUR application repository. It
+# checks out your repo, downloads the prebuilt binary, and runs Bright Agent
+# against the working copy. The agent reacts into the pull request (commits fixes
+# to the source branch, a sticky summary comment, and a "Bright Agent" commit
+# status).
+#
+# Triggers:
+#   - Pull request   -> PR-scoped scan, narrowed to the PR diff. Declared under
+#                       `pipelines.pull-requests` below.
+#   - Manual         -> on-demand full scan via the "Run pipeline" button in
+#                       Pipelines, using the `custom` pipeline definition.
+#   - Schedule       -> nightly/weekly full scan. Create one in Repository
+#                       Settings -> Pipelines -> Schedules (point it at a branch
+#                       and pick the custom pipeline name `bright-agent-scan`).
+#   - /bright-agent  -> comment steering. Bitbucket has no native PR-comment
+#                       trigger, so wire a WEBHOOK that calls the Pipelines API
+#                       (see "Steering" at the bottom).
+#
+# Runner prerequisites: Docker, Docker Compose, Git, curl, sha256sum. The
+# atlassian/default-image:4 image includes all of these.
+#
+# Required repository variables (Repository Settings -> Pipelines -> Repository
+# variables -- tick "Secured" for secrets):
+#   BRIGHT_TOKEN        Bright API token from https://app.brightsec.com
+#   REPO_ACCESS_TOKEN   Bitbucket App Password (or Repository/Workspace Access
+#                       Token) with `repositories:write` and
+#                       `pullrequests:write` scopes.
+#   INFERENCE_TOKEN     Token for your OpenAI-compatible endpoint
+#   INFERENCE_URL       That endpoint's base URL (OpenAI / Ollama / ...)
+
+image: atlassian/default-image:4
+
+definitions:
+  steps:
+    - step: &bright-agent-step
+        name: Bright Agent Scan
+        size: 2x # use a larger runner for Docker-in-Docker workloads
+        services:
+          - docker
+        script:
+          - |
+            set -eu
+            # Latest release. To pin a version, replace 'latest/download' with
+            # 'download/<tag>', e.g. .../releases/download/v0.1.1
+            ASSET="bright-agent-linux-x64"
+            base="https://github.com/NeuraLegion/bright-agent-dist/releases/latest/download"
+            # Download OUTSIDE the checkout so the binary is never swept into a
+            # fix commit (the agent commits with `git add -A`).
+            curl -fsSL -o "/tmp/$ASSET" "$base/$ASSET"
+            curl -fsSL -o "/tmp/$ASSET.sha256" "$base/$ASSET.sha256"
+            ( cd /tmp && sha256sum -c "$ASSET.sha256" )
+            chmod +x "/tmp/$ASSET"
+            # Run against the checkout. BRIGHT_TOKEN, REPO_ACCESS_TOKEN,
+            # INFERENCE_* come from repository variables (already in the env).
+            # Steering inputs (BRIGHT_STEERING_*) are injected by the webhook
+            # relay for a `/bright-agent` comment, absent otherwise (normal scan).
+            export LOCAL_REPO_PATH="$BITBUCKET_CLONE_DIR"
+            export REPOSITORY_URL="https://bitbucket.org/${BITBUCKET_WORKSPACE}/${BITBUCKET_REPO_SLUG}"
+            "/tmp/$ASSET"
+  services:
+    docker:
+      memory: 3072
+
+pipelines:
+  # Run on every pull request (scoped to the PR diff automatically).
+  pull-requests:
+    "**":
+      - step: *bright-agent-step
+
+  # Manual / scheduled runs (full-repo scan).
+  custom:
+    bright-agent-scan:
+      - step: *bright-agent-step
+
+    # Steering: triggered by the webhook relay when a `/bright-agent` comment is
+    # posted on a pull request (see below).
+    bright-agent-steering:
+      - step: *bright-agent-step
+
+# ---------------------------------------------------------------------------
+# Steering: `/bright-agent <guidance>` on a pull request
+# ---------------------------------------------------------------------------
+# Bitbucket has no native "run pipeline on PR comment" trigger, so bridge it
+# with a webhook and a small relay:
+#
+# 1. Add a webhook in Repository Settings -> Webhooks:
+#    - URL: your relay endpoint (e.g. an AWS Lambda, Cloud Function, or similar)
+#    - Triggers: "Pull Request: Comment created" (pullrequest:comment_created)
+#
+# 2. The relay inspects the incoming payload. If the comment body contains
+#    "/bright-agent" AND the commenter is authorized (e.g. a workspace member),
+#    it calls the Bitbucket Pipelines API to trigger the custom pipeline:
+#       POST https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}/pipelines/
+#       Body:
+#       {
+#         "target": {
+#           "type": "pipeline_ref_target",
+#           "ref_type": "branch",
+#           "ref_name": "<PR source branch>",
+#           "selector": { "type": "custom", "pattern": "bright-agent-steering" }
+#         },
+#         "variables": [
+#           { "key": "BRIGHT_STEERING_COMMENT",       "value": "<comment body>" },
+#           { "key": "BRIGHT_STEERING_COMMENT_ID",    "value": "<comment id>" },
+#           { "key": "BRIGHT_STEERING_AUTHOR",        "value": "<user display_name>" },
+#           { "key": "BRIGHT_STEERING_AUTHOR_ASSOCIATION", "value": "MEMBER" },
+#           { "key": "BRIGHT_STEERING_PR_NUMBER",     "value": "<PR id>" },
+#           { "key": "BRIGHT_STEERING_PR_HEAD",       "value": "<source branch>" },
+#           { "key": "BRIGHT_STEERING_PR_BASE",       "value": "<destination branch>" }
+#         ]
+#       }
+#    Authenticate the API call with an App Password that has
+#    `pipelines:write` scope.
+#
+# Authorization: the agent only honors steering when the author association is
+# OWNER, MEMBER, or COLLABORATOR (case-insensitive). Bitbucket PR comment
+# webhooks do carry the actor, but NOT their role in the repository. The RELAY
+# is your trust boundary: look up the user's workspace membership via the API
+# and only forward comments from authorized users (set
+# BRIGHT_STEERING_AUTHOR_ASSOCIATION=MEMBER for them). Do NOT forward arbitrary
+# comments with an authorized role, or anyone could steer the agent.
+#
+# On a successful run the agent commits any fixes to the PR's source branch,
+# upserts a single summary comment, and sets a "Bright Agent" build status --
+# the same reaction it performs on GitHub, Azure DevOps, and GitLab.
