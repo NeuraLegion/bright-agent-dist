@@ -59,7 +59,15 @@ bright-agent:
       # for a `/bright-agent` comment, and are absent otherwise (normal scan).
       LOCAL_REPO_PATH="$CI_PROJECT_DIR" \
       REPOSITORY_URL="$CI_PROJECT_URL" \
-      "$tmp/$ASSET"
+      "$tmp/$ASSET" || true  # don't fail the job — logs are the deliverable
+      # Copy logs to a known location for artifact collection
+      mkdir -p "$CI_PROJECT_DIR/.bright-logs"
+      cp -r "$HOME/.bright-agent/logs/"* "$CI_PROJECT_DIR/.bright-logs/" 2>/dev/null || true
+  artifacts:
+    when: always
+    paths:
+      - .bright-logs/
+    expire_in: 7 days
 
 # ---------------------------------------------------------------------------
 # Steering: `/bright-agent <guidance>` on a merge request

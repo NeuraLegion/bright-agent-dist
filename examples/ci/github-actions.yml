@@ -157,6 +157,14 @@ jobs:
           # BRIGHT_DEBUG: "1"
         run: "${{ runner.temp }}/${{ env.ASSET }}"
 
+      - name: Upload Bright Agent logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bright-agent-logs
+          path: ~/.bright-agent/logs/
+          retention-days: 7
+
 # NOTE: commits/PRs/comments made with GITHUB_TOKEN do not trigger your other
 # workflows (GitHub's anti-recursion rule). To have fix commits re-run your
 # repo's CI, use a PAT instead: REPO_ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
