@@ -64,17 +64,20 @@ INFERENCE_TOKEN="your-inference-token" \
 | `REPO_ACCESS_TOKEN` | **Yes**  | Token that can push branches and open PRs                                                    |
 | `BRIGHT_TOKEN`      | **Yes**  | Bright API token from https://app.brightsec.com                                              |
 | `INFERENCE_TOKEN`   | **Yes**  | API token for your inference endpoint                                                        |
-| `INFERENCE_URL`     | No       | Your OpenAI-compatible endpoint. Default: `https://api.openai.com/v1` (OpenAI). Also works with GitHub Models, Ollama, or a Bedrock-compatible gateway |
+| `INFERENCE_URL`     | No       | Your inference endpoint. Default: `https://api.openai.com/v1` (OpenAI). Also works with Anthropic (`https://api.anthropic.com`), GitHub Models, Ollama, or any OpenAI-compatible gateway |
 | `REPOSITORY_URL`    | No       | Repo identity for the PR. Derived from the checkout's `origin` remote if omitted             |
 | `AI_MODEL`          | No       | Model name or comma-separated escalation chain. Default: `gpt-5.4-mini`                      |
 
-Bring your own inference provider — anything exposing an **OpenAI-compatible
-API**. (If you use OpenAI directly you can also set `OPENAI_API_KEY` instead of
-`INFERENCE_TOKEN`.)
+Bring your own inference provider — **OpenAI**, **Anthropic (Claude)**, **GitHub
+Models**, **Ollama**, or any OpenAI-compatible gateway. (If you use OpenAI
+directly you can also set `OPENAI_API_KEY` instead of `INFERENCE_TOKEN`.)
 
-Bring your own inference provider — anything exposing an **OpenAI-compatible
-API**. (If you use OpenAI directly you can also set `OPENAI_API_KEY` instead of
-`INFERENCE_TOKEN`.)
+The agent auto-detects the provider from the URL:
+- `api.openai.com` → OpenAI
+- `api.anthropic.com` → Anthropic (Claude)
+- `models.github.ai` → GitHub Models
+- `localhost:11434` → Ollama
+- Anything else → OpenAI-compatible
 
 The agent keeps the console quiet by default and writes a full, secret-redacted
 diagnostic log to `~/.bright-agent/logs/run-<timestamp>.log`. Set `BRIGHT_DEBUG=1`
