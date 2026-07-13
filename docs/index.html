@@ -385,12 +385,9 @@ function renderForm() {
   // 5. Inference
   const provSel = selectField("Provider", "STAR works with any OpenAI-compatible API.",
     Object.entries(PROVIDERS).map(([id, p]) => [id, p.t]), S.provider, (v) => { S.provider = v; S.inferenceUrl = PROVIDERS[v].url; });
-  const urlField = textField("INFERENCE_URL", "Stored as a plain (non-secret) CI variable.", S.inferenceUrl, (v) => { S.inferenceUrl = v; });
-  const modelField = textField("AI_MODEL (optional)", "Single model or a comma-separated escalation chain.", S.aiModel, (v) => { S.aiModel = v; }, PROVIDERS[S.provider].model || "provider default");
+  const urlField = textField("INFERENCE_URL", "Written directly into the generated workflow file (non-secret).", S.inferenceUrl, (v) => { S.inferenceUrl = v; });
+  const modelField = textField("AI_MODEL (optional)", "Single model or a comma-separated escalation chain. Blank = provider default, written into the file.", S.aiModel, (v) => { S.aiModel = v; }, PROVIDERS[S.provider].model || "provider default");
   const provExtra = [provSel, urlField, modelField];
-  if (S.provider === "openai") {
-    provExtra.push(el("div", { class: "field" }, [toggleRow("Use OPENAI_API_KEY", "Name the secret OPENAI_API_KEY instead of INFERENCE_TOKEN.", S.useOpenAIKey, (v) => { S.useOpenAIKey = v; })]));
-  }
   root.appendChild(card("Inference", "your LLM endpoint", provExtra));
 
   // 6. Repo access

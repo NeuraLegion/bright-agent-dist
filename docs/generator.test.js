@@ -62,13 +62,20 @@ test("dlBase trims whitespace in the tag", () => {
 // ---------------------------------------------------------------------------
 // scanKnobs
 // ---------------------------------------------------------------------------
-test("scanKnobs is empty for the default (auto scope, full mode)", () => {
-  assert.deepEqual(G.scanKnobs(st()), []);
+test("scanKnobs emits the provider default AI_MODEL for the default state", () => {
+  const knobs = G.scanKnobs(st());
+  assert.deepEqual(knobs.map((x) => x.k), ["AI_MODEL"]);
+  assert.equal(knobs[0].v, G.PROVIDERS.openai.model);
 });
-test("scanKnobs includes SCAN_SCOPE only when not auto", () => {
-  const keys = G.scanKnobs(st({ scope: "changed" })).map((x) => x.k);
-  assert.deepEqual(keys, ["SCAN_SCOPE"]);
-  assert.equal(G.scanKnobs(st({ scope: "changed" }))[0].v, "changed");
+test("scanKnobs includes SCAN_SCOPE (plus the default AI_MODEL) when not auto", () => {
+  const knobs = G.scanKnobs(st({ scope: "changed" }));
+  const map = Object.fromEntries(knobs.map((x) => [x.k, x.v]));
+  assert.equal(map.SCAN_SCOPE, "changed");
+  assert.equal(map.AI_MODEL, G.PROVIDERS.openai.model);
+});
+test("scanKnobs uses the provider default model per provider, custom stays unset", () => {
+  assert.equal(G.scanKnobs(st({ provider: "anthropic" })).find((x) => x.k === "AI_MODEL").v, G.PROVIDERS.anthropic.model);
+  assert.ok(!G.scanKnobs(st({ provider: "custom" })).some((x) => x.k === "AI_MODEL"));
 });
 test("scanKnobs suppresses SCAN_SCOPE in validation mode", () => {
   const keys = G.scanKnobs(st({ scope: "changed", runMode: "validation" })).map((x) => x.k);
@@ -108,10 +115,12 @@ test("shellQuote leaves safe values, quotes the rest", () => {
 test("esc escapes HTML", () => {
   assert.equal(G.esc("<a & b>"), "&lt;a &amp; b&gt;");
 });
-test("inferenceSecretName / usesOpenAIKey", () => {
-  assert.equal(G.inferenceSecretName(st()), "INFERENCE_TOKEN");
-  assert.equal(G.inferenceSecretName(st({ provider: "openai", useOpenAIKey: true })), "OPENAI_API_KEY");
-  assert.equal(G.usesOpenAIKey(st({ provider: "custom", useOpenAIKey: true })), false);
+test("the inference secret is always INFERENCE_TOKEN", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const y = G.generateYaml(st({ platform, triggers: only(...G.PLATFORMS[platform].triggers) }));
+    assert.ok(/INFERENCE_TOKEN|inference-token/.test(y), `${platform} references INFERENCE_TOKEN`);
+    assert.ok(!/OPENAI_API_KEY|openai-api-key/.test(y), `${platform} has no OPENAI_API_KEY`);
+  }
 });
 test("needsRepoToken: PAT on github, always on non-builtin platforms", () => {
   assert.equal(G.needsRepoToken(st()), false);
@@ -139,6 +148,15 @@ test("no generated file contains a tab character", () => {
   for (const platform of Object.keys(G.PLATFORMS)) {
     const s = st({ platform, triggers: only(...G.PLATFORMS[platform].triggers) });
     assert.ok(!/\t/.test(G.generateYaml(s)), `${platform} has no tabs`);
+  }
+});
+test("every platform hardcodes INFERENCE_URL rather than reading a CI variable", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const s = st({ platform, triggers: only(...G.PLATFORMS[platform].triggers), inferenceUrl: "https://api.openai.com/v1" });
+    const y = G.generateYaml(s);
+    assert.match(y, /api\.openai\.com\/v1/, `${platform} contains the literal URL`);
+    assert.ok(!/vars\.INFERENCE_URL/.test(y), `${platform} has no vars.INFERENCE_URL`);
+    assert.ok(!/\$\(INFERENCE_URL\)/.test(y), `${platform} has no $(INFERENCE_URL)`);
   }
 });
 test("fileName and codeLang", () => {
@@ -192,10 +210,19 @@ test("github: PAT token uses REPO_ACCESS_TOKEN secret and drops the note", () =>
   assert.match(y, /REPO_ACCESS_TOKEN: \$\{\{ secrets\.REPO_ACCESS_TOKEN \}\}/);
   assert.ok(!/don't trigger your other workflows/.test(y));
 });
-test("github: OPENAI_API_KEY variant", () => {
-  const y = G.generateGitHub(st({ provider: "openai", useOpenAIKey: true }));
-  assert.match(y, /OPENAI_API_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
-  assert.ok(!/INFERENCE_TOKEN:/.test(y));
+test("github: uses INFERENCE_TOKEN secret (no OPENAI_API_KEY option)", () => {
+  const y = G.generateGitHub(st({ provider: "openai" }));
+  assert.match(y, /INFERENCE_TOKEN: \$\{\{ secrets\.INFERENCE_TOKEN \}\}/);
+  assert.ok(!/OPENAI_API_KEY/.test(y));
+});
+test("github: INFERENCE_URL is hardcoded, not read from a CI variable", () => {
+  const y = G.generateGitHub(st({ inferenceUrl: "https://api.openai.com/v1" }));
+  assert.match(y, /INFERENCE_URL: "https:\/\/api\.openai\.com\/v1"/);
+  assert.ok(!/vars\.INFERENCE_URL/.test(y));
+});
+test("github: AI_MODEL is baked in (provider default when the field is blank)", () => {
+  assert.match(G.generateGitHub(st()), new RegExp(`AI_MODEL: ${G.PROVIDERS.openai.model}`));
+  assert.match(G.generateGitHub(st({ aiModel: "gpt-x" })), /AI_MODEL: gpt-x/);
 });
 test("github: validation + codeql injects CodeQL steps and SARIF_PATH", () => {
   const y = G.generateGitHub(st({ runMode: "validation", sarifTool: "codeql", sarifLanguage: "python", triggers: only("manual") }));
@@ -272,8 +299,10 @@ test("jenkins: cron trigger only with schedule; knobs become groovy env", () => 
   assert.match(withSched, /SCAN_SCOPE = 'full'/);
   assert.ok(!/triggers \{ cron/.test(G.generateJenkins(st({ platform: "jenkins", triggers: only("manual") }))));
 });
-test("jenkins: openai key variant swaps the credential id", () => {
-  assert.match(G.generateJenkins(st({ platform: "jenkins", provider: "openai", useOpenAIKey: true })), /credentials\('openai-api-key'\)/);
+test("jenkins: always uses the inference-token credential id", () => {
+  const y = G.generateJenkins(st({ platform: "jenkins", provider: "openai" }));
+  assert.match(y, /credentials\('inference-token'\)/);
+  assert.ok(!/openai-api-key/.test(y));
 });
 
 // ---------------------------------------------------------------------------
@@ -321,18 +350,20 @@ test("generateDoc wires steering only for non-native platforms with steering on"
 test("generateDoc shows validation guidance in validation mode", () => {
   assert.match(G.generateDoc(st({ runMode: "validation", sarifTool: "codeql", triggers: only("manual") })), /SAST validation/);
 });
-test("generateDoc includes the OPENAI_API_KEY row when selected", () => {
-  assert.match(G.generateDoc(st({ provider: "openai", useOpenAIKey: true })), /OPENAI_API_KEY/);
+test("generateDoc always lists INFERENCE_TOKEN and never OPENAI_API_KEY", () => {
+  const d = G.generateDoc(st({ provider: "openai" }));
+  assert.match(d, /INFERENCE_TOKEN/);
+  assert.ok(!/OPENAI_API_KEY/.test(d));
 });
 
 // ---------------------------------------------------------------------------
 // secretRows / summaryLine
 // ---------------------------------------------------------------------------
-test("secretRows always has BRIGHT_TOKEN + an inference secret + INFERENCE_URL", () => {
+test("secretRows has BRIGHT_TOKEN + an inference secret, but not INFERENCE_URL (baked into the file)", () => {
   const names = G.secretRows(st()).map((r) => r[0]);
   assert.ok(names.includes("BRIGHT_TOKEN"));
   assert.ok(names.includes("INFERENCE_TOKEN"));
-  assert.ok(names.includes("INFERENCE_URL"));
+  assert.ok(!names.includes("INFERENCE_URL"));
 });
 test("summaryLine mentions platform, trigger, mode", () => {
   const line = G.summaryLine(st({ triggers: only("pr") }));
