@@ -134,6 +134,13 @@
     return `'${String(v).replace(/'/g, `'\\''`)}'`;
   }
 
+  // Single-quoted Groovy string literal. Escape backslashes first, then quotes,
+  // so user-editable values can't break out of the string or inject into the
+  // generated Jenkinsfile.
+  function groovyQuote(v) {
+    return `'${String(v).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+  }
+
   function inferenceEnvLines(s, indent, prefix) {
     const lines = [];
     // INFERENCE_URL is hardcoded from the builder selection (it's a plain,
@@ -464,7 +471,7 @@
     L.push(`      image: ubuntu-2404:current`);
     L.push(`    environment:`);
     L.push(`      ASSET: ${s.asset}`);
-    L.push(`      INFERENCE_URL: ${s.inferenceUrl}`);
+    L.push(`      INFERENCE_URL: ${yamlScalar(s.inferenceUrl)}`);
     L.push(`      BRIGHT_CI_TIMEOUT_MINUTES: "${s.timeoutMinutes}"`);
     scanKnobs(s).forEach(({ k, v }) => L.push(`      ${k}: ${yamlScalar(v)}`));
     L.push(`    steps:`);
@@ -511,13 +518,13 @@
     L.push(`pipeline {`);
     L.push(`  agent any`);
     L.push(`  environment {`);
-    L.push(`    ASSET             = '${s.asset}'`);
-    L.push(`    INFERENCE_URL     = '${s.inferenceUrl}'`);
+    L.push(`    ASSET             = ${groovyQuote(s.asset)}`);
+    L.push(`    INFERENCE_URL     = ${groovyQuote(s.inferenceUrl)}`);
     L.push(`    BRIGHT_TOKEN      = credentials('bright-token')`);
     L.push(`    REPO_ACCESS_TOKEN = credentials('repo-access-token')`);
     L.push(`    INFERENCE_TOKEN   = credentials('inference-token')`);
-    L.push(`    BRIGHT_CI_TIMEOUT_MINUTES = '${s.timeoutMinutes}'`);
-    scanKnobs(s).forEach(({ k, v }) => L.push(`    ${k} = '${v.replace(/'/g, "\\'")}'`));
+    L.push(`    BRIGHT_CI_TIMEOUT_MINUTES = ${groovyQuote(s.timeoutMinutes)}`);
+    scanKnobs(s).forEach(({ k, v }) => L.push(`    ${k} = ${groovyQuote(v)}`));
     L.push(`  }`);
     L.push(`  options { timeout(time: 2, unit: 'HOURS') }`);
     if (t.schedule) { L.push(`  triggers { cron('H 3 * * *') }`); }
@@ -722,7 +729,7 @@
     defaultState,
     // helpers
     esc, dlBase, activeTriggers, usesPR, usesSteering,
-    needsRepoToken, scanKnobs, yamlScalar, shellQuote, inferenceEnvLines,
+    needsRepoToken, scanKnobs, yamlScalar, shellQuote, groovyQuote, inferenceEnvLines,
     // generators
     generateGitHub, generateGitLab, generateAzure, generateBitbucket, generateCircle, generateJenkins,
     generateYaml, fileName, codeLang,

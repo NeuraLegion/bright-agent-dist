@@ -5,9 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>STAR Workflow Builder — Bright Agent</title>
 <meta name="description" content="Generate a ready-to-use STAR (Bright Agent) CI workflow, plus setup instructions, for GitHub, GitLab, Azure, Bitbucket, CircleCI or Jenkins." />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<!-- No external assets: fonts fall back to the system stack (see font-family
+     rules below), so the page makes zero third-party network requests. -->
 <style>
   :root {
     --magenta: #e25bc5;
@@ -439,8 +438,11 @@ function refresh(rerenderForm) {
 }
 function downloadFile() {
   const blob = new Blob([currentYaml + "\n"], { type: "text/plain" });
-  const a = el("a", { href: URL.createObjectURL(blob), download: G.fileName(S) });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: G.fileName(S) });
   document.body.appendChild(a); a.click(); a.remove();
+  // Release the object URL so repeated downloads don't leak memory.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 function copyYaml() {
   navigator.clipboard.writeText(currentYaml).then(() => showToast("Copied to clipboard")).catch(() => {

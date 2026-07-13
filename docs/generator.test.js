@@ -112,6 +112,20 @@ test("shellQuote leaves safe values, quotes the rest", () => {
   assert.equal(G.shellQuote("a b"), "'a b'");
   assert.equal(G.shellQuote("it's"), "'it'\\''s'");
 });
+test("groovyQuote escapes quotes and backslashes into a single-quoted literal", () => {
+  assert.equal(G.groovyQuote("plain"), "'plain'");
+  assert.equal(G.groovyQuote("it's"), "'it\\'s'");
+  assert.equal(G.groovyQuote("a\\b"), "'a\\\\b'");
+});
+test("circleci: INFERENCE_URL is YAML-quoted (URL has a ':')", () => {
+  const y = G.generateCircle(st({ platform: "circleci", inferenceUrl: "https://api.openai.com/v1" }));
+  assert.match(y, /INFERENCE_URL: "https:\/\/api\.openai\.com\/v1"/);
+});
+test("jenkins: user-editable values are escaped in the Groovy string", () => {
+  const y = G.generateJenkins(st({ platform: "jenkins", inferenceUrl: "http://x/'; sh 'evil", timeoutMinutes: "6'0" }));
+  assert.match(y, /INFERENCE_URL     = 'http:\/\/x\/\\'; sh \\'evil'/);
+  assert.match(y, /BRIGHT_CI_TIMEOUT_MINUTES = '6\\'0'/);
+});
 test("esc escapes HTML", () => {
   assert.equal(G.esc("<a & b>"), "&lt;a &amp; b&gt;");
 });
