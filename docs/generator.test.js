@@ -271,6 +271,29 @@ test("gitlab: exports scan knobs in the script", () => {
   assert.match(y, /export BRIGHT_DEBUG=1/);
   assert.match(y, /export BRIGHT_CI_TIMEOUT_MINUTES=/);
 });
+test("gitlab: MR pipelines guard against the bright-scan feedback loop", () => {
+  const y = G.generateGitLab(st({ platform: "gitlab", triggers: only("pr") }));
+  assert.match(y, /CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ \/\^bright-scan-\//);
+  assert.match(y, /CI_COMMIT_BRANCH =~ \/\^bright-scan-\//);
+  assert.match(y, /when: never/);
+  // The guard must precede the merge_request_event rule.
+  assert.ok(y.indexOf("bright-scan-") < y.indexOf("merge_request_event"));
+});
+test("gitlab: no scan-branch guard when merge requests aren't a trigger", () => {
+  const y = G.generateGitLab(st({ platform: "gitlab", triggers: only("schedule", "manual") }));
+  assert.ok(!/bright-scan-/.test(y));
+});
+test("gitlab: header warns not to mark variables Protected", () => {
+  const y = G.generateGitLab(st({ platform: "gitlab" }));
+  assert.match(y, /Protected/);
+  assert.match(y, /Missing required environment variable: BRIGHT_TOKEN/);
+  assert.ok(!/mask & protect/i.test(y));
+});
+test("gitlab doc: warns about Protected variables breaking MR pipelines", () => {
+  const d = G.generateDoc(st({ platform: "gitlab", triggers: only("pr") }));
+  assert.match(d, /Protected/);
+  assert.match(d, /Missing required environment variable: BRIGHT_TOKEN/);
+});
 
 // ---------------------------------------------------------------------------
 // Azure specifics
