@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>STAR Workflow Builder — Bright Agent</title>
+<meta name="description" content="Generate a ready-to-use STAR (Bright Agent) CI workflow, plus setup instructions, for GitHub, GitLab, Azure, Bitbucket, CircleCI or Jenkins." />
+<!-- No external assets: fonts fall back to the system stack (see font-family
+     rules below), so the page makes zero third-party network requests. -->
+<style>
+  :root {
+    --magenta: #e25bc5;
+    --orange:  #ff7a00;
+    --gold:    #e0c550;
+    --navy:    #191d34;
+    --slate:   #2f3244;
+    --muted:   #62677e;
+    --line:    #e9eaf2;
+    --bg:      #f3f4f9;
+    --card:    #ffffff;
+    --magenta-tint: #fff6fb;
+    --orange-tint:  #fff6ee;
+    --gold-tint:    #fffbe8;
+    --radius: 14px;
+    --shadow: 0 1px 2px rgba(25,29,52,.04), 0 8px 24px rgba(25,29,52,.06);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    color: var(--slate);
+    background: var(--bg);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--magenta); }
+  .bar { display: flex; height: 6px; width: 100%; }
+  .bar > span { flex: 1; }
+  .bar > span:nth-child(1) { background: var(--magenta); }
+  .bar > span:nth-child(2) { background: var(--orange); }
+  .bar > span:nth-child(3) { background: var(--gold); }
+
+  header.site {
+    background: var(--navy);
+    color: #fff;
+    padding: 26px 24px 22px;
+  }
+  header.site .wrap { max-width: 1240px; margin: 0 auto; }
+  header.site .eyebrow {
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: #b9bdd0; font-weight: 600; margin: 0 0 8px;
+  }
+  header.site h1 {
+    margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -.01em;
+  }
+  header.site h1 .accent { color: var(--magenta); }
+  header.site p.lede {
+    margin: 8px 0 0; color: #c9ccdb; font-size: 15px; max-width: 720px;
+  }
+
+  main { max-width: 1240px; margin: 0 auto; padding: 26px 24px 64px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 24px; align-items: start; }
+  @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+
+  .col-out { position: sticky; top: 18px; }
+  @media (max-width: 980px) { .col-out { position: static; } }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-bottom: 18px;
+    overflow: hidden;
+  }
+  .card > .card-h {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .card > .card-h .num {
+    width: 24px; height: 24px; border-radius: 7px; flex: none;
+    display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff;
+    background: var(--magenta);
+  }
+  .card:nth-of-type(3n+2) > .card-h .num { background: var(--orange); }
+  .card:nth-of-type(3n) > .card-h .num { background: var(--gold); color: var(--navy); }
+  .card > .card-h h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--navy); }
+  .card > .card-h .hint { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .card > .card-b { padding: 16px 18px; }
+
+  .opts { display: grid; gap: 10px; }
+  .opts.cols2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 560px) { .opts.cols2 { grid-template-columns: 1fr; } }
+
+  label.opt {
+    display: flex; gap: 11px; align-items: flex-start;
+    border: 1px solid var(--line); border-radius: 11px; padding: 11px 13px;
+    cursor: pointer; transition: border-color .12s, background .12s, box-shadow .12s;
+    background: #fff;
+  }
+  label.opt:hover { border-color: #d5d7e6; }
+  label.opt.checked {
+    border-color: var(--magenta);
+    background: var(--magenta-tint);
+    box-shadow: inset 0 0 0 1px var(--magenta);
+  }
+  label.opt input { margin: 2px 0 0; accent-color: var(--magenta); flex: none; }
+  label.opt.disabled { opacity: .45; cursor: not-allowed; }
+  label.opt .t { font-weight: 600; color: var(--navy); font-size: 13.5px; }
+  label.opt .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  label.opt .badge {
+    display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .04em; padding: 1px 6px; border-radius: 6px; margin-left: 6px;
+    background: var(--gold-tint); color: #8a6d00; border: 1px solid #ecdca0; vertical-align: middle;
+  }
+
+  .field { margin-top: 12px; }
+  .field:first-child { margin-top: 0; }
+  .field label.lbl { display: block; font-size: 12.5px; font-weight: 600; color: var(--navy); margin-bottom: 5px; }
+  .field .sub { font-size: 12px; color: var(--muted); margin: -2px 0 6px; }
+  input[type="text"], select {
+    width: 100%; font: inherit; font-size: 13.5px; color: var(--navy);
+    padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff;
+  }
+  input[type="text"]:focus, select:focus { outline: none; border-color: var(--magenta); box-shadow: 0 0 0 3px rgba(226,91,197,.12); }
+
+  .toggle-row { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+  .toggle-row:first-child { border-top: none; }
+  .toggle-row .meta { flex: 1; }
+  .toggle-row .meta .t { font-weight: 600; font-size: 13.5px; color: var(--navy); }
+  .toggle-row .meta .d { font-size: 12px; color: var(--muted); }
+  .switch { position: relative; width: 40px; height: 22px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track { position: absolute; inset: 0; background: #cfd2e2; border-radius: 999px; transition: .15s; }
+  .switch .track::before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+  .switch input:checked + .track { background: var(--magenta); }
+  .switch input:checked + .track::before { transform: translateX(18px); }
+
+  .out-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .out-head .file {
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--navy);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px;
+  }
+  .out-head .spacer { flex: 1; }
+  .btn {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    border-radius: 9px; padding: 8px 13px; border: 1px solid var(--line); background: #fff; color: var(--navy);
+    transition: .12s;
+  }
+  .btn:hover { border-color: #d5d7e6; }
+  .btn.primary { background: var(--magenta); border-color: var(--magenta); color: #fff; }
+  .btn.primary:hover { background: #cf49b2; }
+  pre.code {
+    margin: 0; padding: 16px 18px; overflow: auto; max-height: 460px;
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.55;
+    background: #0f1222; color: #e6e8f2; white-space: pre;
+  }
+  pre.code .c { color: #7f88b3; }
+  pre.code .k { color: #ff9bdf; }
+  pre.code .s { color: #ffcf8a; }
+
+  .tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
+  .tab { font-size: 13px; font-weight: 600; color: var(--muted); background: none; border: none; padding: 8px 12px; cursor: pointer; border-radius: 8px 8px 0 0; }
+  .tab.active { background: #0f1222; color: #fff; }
+  .tab.active.doc { background: #fff; color: var(--magenta); box-shadow: inset 0 -2px 0 var(--magenta); border-radius: 0; }
+
+  .doc-body { padding: 4px 20px 20px; }
+  .doc-body h3 { font-size: 15px; color: var(--navy); margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+  .doc-body h3 .star { color: var(--magenta); }
+  .doc-body h3:first-child { margin-top: 12px; }
+  .doc-body p { font-size: 13.5px; margin: 6px 0; }
+  .doc-body ol, .doc-body ul { font-size: 13.5px; padding-left: 20px; margin: 6px 0; }
+  .doc-body li { margin: 4px 0; }
+  .doc-body code, .path { font-family: "JetBrains Mono", monospace; font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; color: var(--navy); }
+  .doc-body table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12.5px; }
+  .doc-body th, .doc-body td { text-align: left; padding: 8px 10px; border: 1px solid var(--line); vertical-align: top; }
+  .doc-body th { background: var(--bg); font-weight: 700; color: var(--navy); }
+  .doc-body td code { background: #fff; }
+  .callout {
+    border-left: 3px solid var(--orange); background: var(--orange-tint);
+    padding: 10px 14px; border-radius: 0 10px 10px 0; margin: 12px 0; font-size: 13px;
+  }
+  .callout.warn { border-color: var(--gold); background: var(--gold-tint); }
+  .callout.info { border-color: var(--magenta); background: var(--magenta-tint); }
+  .callout .h { font-weight: 700; color: var(--navy); display: block; margin-bottom: 2px; }
+  footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12px; }
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--navy); color:#fff; padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: .2s; z-index: 50; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="bar"><span></span><span></span><span></span></div>
+<header class="site">
+  <div class="wrap">
+    <p class="eyebrow">Bright Security · STAR (Bright Agent)</p>
+    <h1>STAR <span class="accent">Workflow</span> Builder</h1>
+    <p class="lede">Pick what your team needs and get a ready-to-commit CI workflow — plus exactly where to put it and which secrets and variables to add in your repository settings. Everything runs in your browser; nothing is sent anywhere.</p>
+  </div>
+</header>
+
+<main>
+  <div class="layout">
+    <section class="col-cfg" id="cfg"></section>
+    <section class="col-out">
+      <div class="card">
+        <div class="tabs">
+          <button class="tab active" id="tab-yaml" type="button">Workflow file</button>
+          <button class="tab doc" id="tab-doc" type="button">Setup instructions</button>
+        </div>
+        <div id="view-yaml">
+          <div class="out-head">
+            <span class="file" id="out-file">.github/workflows/bright-agent.yml</span>
+            <span class="spacer"></span>
+            <button class="btn" id="btn-copy" type="button">Copy</button>
+            <button class="btn primary" id="btn-download" type="button">Download</button>
+          </div>
+          <pre class="code" id="out-code">…</pre>
+        </div>
+        <div id="view-doc" style="display:none">
+          <div class="doc-body" id="out-doc"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  STAR ships as a self-contained binary from <a href="https://github.com/NeuraLegion/bright-agent-dist">bright-agent-dist</a>.
+  Templates mirror <span class="path">examples/ci/</span>. Generated files use the latest release by default — pin a version for reproducible runs.
+</footer>
+
+<div class="toast" id="toast">Copied</div>
+
+<script src="generator.js"></script>
+<script>
+"use strict";
+const G = window.StarGen;
+const { PLATFORMS, TRIGGER_META, RUN_MODES, SCOPES, PROVIDERS, ARCHES } = G;
+
+// UI state (source of truth for the form; pure generators in generator.js read it).
+const S = G.defaultState();
+
+// --- tiny DOM helper --------------------------------------------------------
+const el = (tag, attrs = {}, kids = []) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v;
+    else if (k === "html") n.innerHTML = v;
+    else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) n.setAttribute(k, v);
+  }
+  (Array.isArray(kids) ? kids : [kids]).forEach((c) => c != null && n.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+  return n;
+};
+const esc = G.esc;
+const activeTriggers = () => G.activeTriggers(S);
+const usesPR = () => G.usesPR(S);
+const usesSteering = () => G.usesSteering(S);
+
+// --- form widgets -----------------------------------------------------------
+let cardSeq = 0;
+function card(title, hint, bodyNodes) {
+  cardSeq++;
+  const h = el("div", { class: "card-h" }, [
+    el("span", { class: "num" }, String(cardSeq)),
+    el("h2", {}, title),
+    hint ? el("span", { class: "hint" }, hint) : null,
+  ]);
+  return el("div", { class: "card" }, [h, el("div", { class: "card-b" }, bodyNodes)]);
+}
+function optRadio(group, value, meta, checked, disabled, badge) {
+  const input = el("input", { type: "radio", name: group, value, ...(checked ? { checked: "checked" } : {}), ...(disabled ? { disabled: "disabled" } : {}) });
+  return el("label", { class: "opt" + (checked ? " checked" : "") + (disabled ? " disabled" : "") }, [
+    input,
+    el("div", {}, [
+      el("div", { class: "t", html: esc(meta.t) + (badge ? ` <span class="badge">${esc(badge)}</span>` : "") }),
+      el("div", { class: "d" }, meta.d),
+    ]),
+  ]);
+}
+function optCheck(meta, checked, disabled, badge) {
+  const input = el("input", { type: "checkbox", ...(checked ? { checked: "checked" } : {}), ...(disabled ? { disabled: "disabled" } : {}) });
+  return el("label", { class: "opt" + (checked ? " checked" : "") + (disabled ? " disabled" : "") }, [
+    input,
+    el("div", {}, [
+      el("div", { class: "t", html: esc(meta.t) + (badge ? ` <span class="badge">${esc(badge)}</span>` : "") }),
+      el("div", { class: "d" }, meta.d),
+    ]),
+  ]);
+}
+function textField(label, sub, value, onInput, ph) {
+  const inp = el("input", { type: "text", value: value || "", ...(ph ? { placeholder: ph } : {}) });
+  inp.addEventListener("input", (e) => { onInput(e.target.value); refresh(false); });
+  return el("div", { class: "field" }, [el("label", { class: "lbl" }, label), sub ? el("div", { class: "sub" }, sub) : null, inp]);
+}
+function selectField(label, sub, options, value, onChange) {
+  const sel = el("select", {});
+  options.forEach(([v, t]) => sel.appendChild(el("option", { value: v, ...(v === value ? { selected: "selected" } : {}) }, t)));
+  sel.addEventListener("change", (e) => { onChange(e.target.value); refresh(true); });
+  return el("div", { class: "field" }, [el("label", { class: "lbl" }, label), sub ? el("div", { class: "sub" }, sub) : null, sel]);
+}
+function toggleRow(t, d, checked, onChange) {
+  const input = el("input", { type: "checkbox", ...(checked ? { checked: "checked" } : {}) });
+  input.addEventListener("change", (e) => { onChange(e.target.checked); refresh(false); });
+  return el("div", { class: "toggle-row" }, [
+    el("div", { class: "meta" }, [el("div", { class: "t" }, t), el("div", { class: "d" }, d)]),
+    el("label", { class: "switch" }, [input, el("span", { class: "track" })]),
+  ]);
+}
+
+// --- form -------------------------------------------------------------------
+function renderForm() {
+  cardSeq = 0;
+  const root = document.getElementById("cfg");
+  root.innerHTML = "";
+  const P = PLATFORMS[S.platform];
+
+  // 1. Platform
+  const platOpts = el("div", { class: "opts cols2" });
+  Object.entries(PLATFORMS).forEach(([id, p]) => {
+    const lab = optRadio("platform", id, { t: p.name, d: p.file }, S.platform === id, false);
+    lab.querySelector("input").addEventListener("change", () => { S.platform = id; onPlatformChange(); });
+    platOpts.appendChild(lab);
+  });
+  root.appendChild(card("CI / VCS platform", "where STAR runs", [platOpts]));
+
+  // 2. Triggers
+  const trigOpts = el("div", { class: "opts" });
+  ["pr","push","schedule","manual","steering"].forEach((id) => {
+    const supported = P.triggers.includes(id);
+    let meta = TRIGGER_META[id];
+    if (id === "pr") meta = { t: P.prWord + " (diff scan)", d: TRIGGER_META.pr.d };
+    let badge = null;
+    if (id === "steering" && supported && !P.nativeSteering) badge = "needs webhook relay";
+    const lab = optCheck(meta, !!S.triggers[id] && supported, !supported, badge);
+    lab.querySelector("input").addEventListener("change", (e) => { S.triggers[id] = e.target.checked; refresh(true); });
+    trigOpts.appendChild(lab);
+  });
+  const trigNote = el("div", { class: "sub", style: "margin-top:10px" },
+    P.triggers.includes("pr")
+      ? "Tip: keep PR/MR runs diff-scoped and fast; run full baselines on a schedule."
+      : "This platform runs scheduled/manual scans out of the box. PR-comment steering needs a webhook relay.");
+  root.appendChild(card("Triggers", "when it runs", [trigOpts, trigNote]));
+
+  // 3. Run mode
+  const modeOpts = el("div", { class: "opts" });
+  Object.entries(RUN_MODES).forEach(([id, meta]) => {
+    const lab = optRadio("runmode", id, meta, S.runMode === id, false);
+    lab.querySelector("input").addEventListener("change", () => { S.runMode = id; refresh(true); });
+    modeOpts.appendChild(lab);
+  });
+  const modeExtra = [];
+  if (S.runMode === "validation") {
+    if (P.codeql) {
+      modeExtra.push(selectField("SARIF source", "GitHub can run CodeQL for you and hand STAR the SARIF.",
+        [["codeql","CodeQL (generated by this workflow)"],["other","Existing SARIF file (Semgrep, Snyk, …)"]], S.sarifTool, (v) => { S.sarifTool = v; }));
+      if (S.sarifTool === "codeql") {
+        modeExtra.push(selectField("CodeQL language", "", [["javascript","javascript"],["python","python"],["java","java"],["go","go"],["csharp","csharp"],["ruby","ruby"],["cpp","cpp"]], S.sarifLanguage, (v) => { S.sarifLanguage = v; }));
+      } else {
+        modeExtra.push(textField("SARIF_PATH", "Path to the SARIF file your other job produced (outside the checkout).", S.sarifPath, (v) => { S.sarifPath = v; }, "${{ runner.temp }}/results.sarif"));
+      }
+    } else {
+      modeExtra.push(textField("SARIF_PATH", "Path to a SARIF file produced by a previous stage/job. Required for validation mode.", S.sarifPath, (v) => { S.sarifPath = v; }, "path/to/results.sarif"));
+    }
+  }
+  root.appendChild(card("Run mode", "how STAR reaches the app", [modeOpts, ...modeExtra]));
+
+  // 4. Scan scope
+  if (S.runMode !== "validation") {
+    const scopeOpts = el("div", { class: "opts" });
+    Object.entries(SCOPES).forEach(([id, meta]) => {
+      const lab = optRadio("scope", id, meta, S.scope === id, false);
+      lab.querySelector("input").addEventListener("change", () => { S.scope = id; refresh(false); });
+      scopeOpts.appendChild(lab);
+    });
+    const only = activeTriggers().every((t) => t === "schedule" || t === "manual");
+    const scopeNote = only && S.scope === "auto"
+      ? el("div", { class: "sub", style: "margin-top:10px" }, "With only scheduled/manual triggers, auto resolves to a full scan. Set “Force full” to be explicit.")
+      : null;
+    root.appendChild(card("Scan scope", "what gets scanned", scopeNote ? [scopeOpts, scopeNote] : [scopeOpts]));
+  }
+
+  // 5. Inference
+  const provSel = selectField("Provider", "STAR works with any OpenAI-compatible API.",
+    Object.entries(PROVIDERS).map(([id, p]) => [id, p.t]), S.provider, (v) => { S.provider = v; S.inferenceUrl = PROVIDERS[v].url; });
+  const urlField = textField("INFERENCE_URL", "Written directly into the generated workflow file (non-secret).", S.inferenceUrl, (v) => { S.inferenceUrl = v; });
+  const modelField = textField("AI_MODEL (optional)", "Single model or a comma-separated escalation chain. Blank = provider default, written into the file.", S.aiModel, (v) => { S.aiModel = v; }, PROVIDERS[S.provider].model || "provider default");
+  const provExtra = [provSel, urlField, modelField];
+  root.appendChild(card("Inference", "your LLM endpoint", provExtra));
+
+  // 6. Repo access
+  const tokenNodes = [];
+  if (P.builtinToken) {
+    const tOpts = el("div", { class: "opts" });
+    const b = optRadio("token", "builtin", { t: S.platform === "github" ? "Built-in GITHUB_TOKEN" : "Built-in System.AccessToken", d: "No PAT to create. Note: fix commits won't trigger your other pipelines." }, S.tokenMode === "builtin", false);
+    b.querySelector("input").addEventListener("change", () => { S.tokenMode = "builtin"; refresh(true); });
+    const p = optRadio("token", "pat", { t: "Personal access token (PAT)", d: "Set REPO_ACCESS_TOKEN. Needed if fix commits should re-run your CI." }, S.tokenMode === "pat", false);
+    p.querySelector("input").addEventListener("change", () => { S.tokenMode = "pat"; refresh(true); });
+    tOpts.appendChild(b); tOpts.appendChild(p);
+    tokenNodes.push(tOpts);
+  } else {
+    tokenNodes.push(el("p", { class: "sub" }, "This platform needs a REPO_ACCESS_TOKEN secret that can push branches and open PRs/MRs (see instructions)."));
+  }
+  root.appendChild(card("Repository access", "how STAR pushes fixes", tokenNodes));
+
+  // 7. Advanced
+  const adv = [];
+  adv.push(selectField("Runner OS / arch", "Pick the asset matching your runner.", ARCHES.map((a) => [a, a.replace("bright-agent-", "")]), S.asset, (v) => { S.asset = v; }));
+  adv.push(textField("Pin version (optional)", "Empty = latest release. Otherwise a release tag for reproducible runs.", S.version, (v) => { S.version = v; }, "v0.1.1"));
+  if (usesPR() || S.triggers.push) adv.push(textField("Default branch", "Used for PR base / push trigger.", S.defaultBranch, (v) => { S.defaultBranch = v; }, "main"));
+  adv.push(textField("Monorepo service root (optional)", "BRIGHT_SERVICE_ROOT — usually auto-detected.", S.serviceRoot, (v) => { S.serviceRoot = v; }, "apps/monolith"));
+  adv.push(textField("Self-hosted SCM override (optional)", "BRIGHT_SCM_PLATFORM for GitHub Enterprise / self-managed GitLab.", S.scmOverride, (v) => { S.scmOverride = v; }, "github | gitlab | azure-devops"));
+  if (S.platform !== "github") adv.push(textField("CI timeout minutes", "BRIGHT_CI_TIMEOUT_MINUTES — checkpoint before the runner is killed.", S.timeoutMinutes, (v) => { S.timeoutMinutes = v; }, "60"));
+  adv.push(el("div", { class: "field" }, [toggleRow("Verbose logging", "Set BRIGHT_DEBUG=1 to mirror the full log to the console.", S.debug, (v) => { S.debug = v; })]));
+  root.appendChild(card("Advanced", "optional", adv));
+}
+
+function onPlatformChange() {
+  const P = PLATFORMS[S.platform];
+  Object.keys(S.triggers).forEach((t) => { if (!P.triggers.includes(t)) S.triggers[t] = false; });
+  if (!activeTriggers().length) {
+    if (P.triggers.includes("schedule")) S.triggers.schedule = true;
+    else S.triggers[P.triggers[0]] = true;
+  }
+  S.tokenMode = P.builtinToken ? (S.tokenMode === "pat" ? "pat" : "builtin") : "pat";
+  refresh(true);
+}
+
+// --- output + wiring --------------------------------------------------------
+let currentYaml = "";
+function refresh(rerenderForm) {
+  if (rerenderForm) renderForm();
+  document.getElementById("out-file").textContent = PLATFORMS[S.platform].file;
+  currentYaml = G.generateYaml(S);
+  document.getElementById("out-code").innerHTML = G.highlight(currentYaml, G.codeLang(S));
+  document.getElementById("out-doc").innerHTML = G.generateDoc(S);
+}
+function downloadFile() {
+  const blob = new Blob([currentYaml + "\n"], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: G.fileName(S) });
+  document.body.appendChild(a); a.click(); a.remove();
+  // Release the object URL so repeated downloads don't leak memory.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+function copyYaml() {
+  navigator.clipboard.writeText(currentYaml).then(() => showToast("Copied to clipboard")).catch(() => {
+    const ta = el("textarea", {}); ta.value = currentYaml; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); showToast("Copied"); } catch (e) {} ta.remove();
+  });
+}
+let toastT;
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 1600);
+}
+function switchTab(which) {
+  const yTab = document.getElementById("tab-yaml"), dTab = document.getElementById("tab-doc");
+  const yView = document.getElementById("view-yaml"), dView = document.getElementById("view-doc");
+  if (which === "yaml") { yTab.classList.add("active"); dTab.classList.remove("active"); yView.style.display = ""; dView.style.display = "none"; }
+  else { dTab.classList.add("active"); yTab.classList.remove("active"); dView.style.display = ""; yView.style.display = "none"; }
+}
+
+document.getElementById("btn-copy").addEventListener("click", copyYaml);
+document.getElementById("btn-download").addEventListener("click", downloadFile);
+document.getElementById("tab-yaml").addEventListener("click", () => switchTab("yaml"));
+document.getElementById("tab-doc").addEventListener("click", () => switchTab("doc"));
+refresh(true);
+</script>
+</body>
+</html>
