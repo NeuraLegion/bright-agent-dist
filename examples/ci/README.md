@@ -134,7 +134,7 @@ Store these in your CI's secret manager — never commit them.
 | `BRIGHT_TOKEN`      | Bright API token from https://app.brightsec.com                |
 | `REPO_ACCESS_TOKEN` | Token that can push branches and open PRs on the repo          |
 | `INFERENCE_TOKEN`   | API token for your OpenAI-compatible inference endpoint        |
-| `INFERENCE_URL`     | That endpoint's base URL (OpenAI, GitHub Models, Ollama, a Bedrock-compatible gateway, …). Not secret — store as a CI variable |
+| `INFERENCE_URL`     | That endpoint's base URL (OpenAI, Azure Foundry, Anthropic, Ollama, a Bedrock-compatible gateway, …). Not secret — store as a CI variable |
 | `LOCAL_REPO_PATH`   | Path to the checked-out repo to scan. Defaults to the current directory (the examples set it to the workspace) |
 | `REPOSITORY_URL`    | Optional — repo identity for the PR. Derived from the checkout's `origin` remote if omitted |
 
