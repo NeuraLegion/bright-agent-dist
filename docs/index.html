@@ -412,7 +412,7 @@ function renderForm() {
   adv.push(textField("Monorepo service root (optional)", "BRIGHT_SERVICE_ROOT — usually auto-detected.", S.serviceRoot, (v) => { S.serviceRoot = v; }, "apps/monolith"));
   adv.push(textField("Self-hosted SCM override (optional)", "BRIGHT_SCM_PLATFORM for GitHub Enterprise / self-managed GitLab.", S.scmOverride, (v) => { S.scmOverride = v; }, "github | gitlab | azure-devops"));
   if (S.platform !== "github") adv.push(textField("CI timeout minutes", "BRIGHT_CI_TIMEOUT_MINUTES — checkpoint before the runner is killed.", S.timeoutMinutes, (v) => { S.timeoutMinutes = v; }, "60"));
-  adv.push(el("div", { class: "field" }, [toggleRow("Verbose logging", "Set BRIGHT_DEBUG=1 to mirror the full log to the console.", S.debug, (v) => { S.debug = v; })]));
+  adv.push(el("div", { class: "field" }, [toggleRow("Verbose logging", "Set BRIGHT_DEBUG=1 to mirror the full log to the console, and upload the run log as a CI artifact (bright-agent-logs).", S.debug, (v) => { S.debug = v; })]));
   root.appendChild(card("Advanced", "optional", adv));
 }
 
