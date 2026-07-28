@@ -343,6 +343,65 @@ test("jenkins: always uses the inference-token credential id", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Verbose logging → log artifact upload (per platform)
+// ---------------------------------------------------------------------------
+test("debug off: no platform uploads a log artifact", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const y = G.generateYaml(st({ platform, triggers: only(...G.PLATFORMS[platform].triggers), debug: false }));
+    assert.ok(!/bright-agent-logs/.test(y), `${platform} has no log artifact when debug is off`);
+  }
+});
+test("debug on: every platform captures ~/.bright-agent/logs as a bright-agent-logs artifact", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const y = G.generateYaml(st({ platform, triggers: only(...G.PLATFORMS[platform].triggers), debug: true }));
+    assert.match(y, /bright-agent-logs/, `${platform} names the log artifact`);
+    assert.match(y, /~\/\.bright-agent\/logs/, `${platform} references the log dir`);
+  }
+});
+test("github: debug uploads logs with upload-artifact and if: always()", () => {
+  const y = G.generateGitHub(st({ debug: true }));
+  assert.match(y, /uses: actions\/upload-artifact@v4/);
+  assert.match(y, /name: bright-agent-logs/);
+  assert.match(y, /path: ~\/\.bright-agent\/logs\//);
+  assert.match(y, /if-no-files-found: ignore/);
+});
+test("gitlab: debug copies logs into CI_PROJECT_DIR and declares when: always artifacts", () => {
+  const y = G.generateGitLab(st({ platform: "gitlab", debug: true }));
+  assert.match(y, /after_script:/);
+  assert.match(y, /\$CI_PROJECT_DIR\/bright-agent-logs/);
+  assert.match(y, /artifacts:/);
+  assert.match(y, /when: always/);
+});
+test("azure: debug stages logs and publishes a pipeline artifact, always()", () => {
+  const y = G.generateAzure(st({ platform: "azure", debug: true }));
+  assert.match(y, /PublishPipelineArtifact@1/);
+  assert.match(y, /artifact: bright-agent-logs/);
+  assert.match(y, /condition: always\(\)/);
+});
+test("bitbucket: debug uses after-script + step artifacts relative to the clone dir", () => {
+  const y = G.generateBitbucket(st({ platform: "bitbucket", debug: true }));
+  assert.match(y, /after-script:/);
+  assert.match(y, /\$BITBUCKET_CLONE_DIR\/bright-agent-logs/);
+  assert.match(y, /- bright-agent-logs\/\*\*/);
+});
+test("circleci: debug collects logs (when: always) and stores them", () => {
+  const y = G.generateCircle(st({ platform: "circleci", debug: true }));
+  assert.match(y, /when: always/);
+  assert.match(y, /store_artifacts:/);
+  assert.match(y, /destination: bright-agent-logs/);
+});
+test("jenkins: debug archives logs in a post-always block", () => {
+  const y = G.generateJenkins(st({ platform: "jenkins", debug: true }));
+  assert.match(y, /post \{/);
+  assert.match(y, /always \{/);
+  assert.match(y, /archiveArtifacts artifacts: 'bright-agent-logs\/\*\*', allowEmptyArchive: true/);
+});
+test("doc: debug adds the log-artifact callout", () => {
+  assert.match(G.generateDoc(st({ debug: true })), /Logs are uploaded as an artifact/);
+  assert.ok(!/Logs are uploaded as an artifact/.test(G.generateDoc(st({ debug: false }))));
+});
+
+// ---------------------------------------------------------------------------
 // Highlight
 // ---------------------------------------------------------------------------
 test("highlight wraps comments and keys and escapes HTML", () => {

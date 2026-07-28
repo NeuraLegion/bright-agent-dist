@@ -280,6 +280,19 @@
       L.push(`          BRIGHT_STEERING_PR_BASE: \${{ steps.steer.outputs.base_ref }}`);
     }
     L.push(`        run: "\${{ runner.temp }}/\${{ env.ASSET }}"`);
+    if (s.debug) {
+      // Verbose logging: keep the full run log (written to ~/.bright-agent/logs
+      // regardless of console mirroring) as a CI artifact. `if: always()` so it
+      // survives a failed run; upload-artifact expands `~` to the runner home.
+      L.push(``);
+      L.push(`      - name: Upload Bright Agent logs`);
+      L.push(`        if: always()`);
+      L.push(`        uses: actions/upload-artifact@v4`);
+      L.push(`        with:`);
+      L.push(`          name: bright-agent-logs`);
+      L.push(`          path: ~/.bright-agent/logs/`);
+      L.push(`          if-no-files-found: ignore`);
+    }
     if (s.tokenMode === "builtin") {
       L.push(``);
       L.push(`# NOTE: commits/PRs made with GITHUB_TOKEN don't trigger your other workflows.`);
@@ -339,6 +352,20 @@
     scanKnobs(s).forEach(({ k, v }) => L.push(`      export ${k}=${shellQuote(v)}`));
     L.push(`      export BRIGHT_CI_TIMEOUT_MINUTES=${shellQuote(s.timeoutMinutes)}`);
     L.push(`      "$tmp/$ASSET"`);
+    if (s.debug) {
+      // GitLab only collects artifacts from inside $CI_PROJECT_DIR, and the run
+      // log lives in ~/.bright-agent/logs. Copy it into the project dir in
+      // after_script (runs even if the job fails) then upload it.
+      L.push(`  after_script:`);
+      L.push(`    - mkdir -p "$CI_PROJECT_DIR/bright-agent-logs"`);
+      L.push(`    - cp -a ~/.bright-agent/logs/. "$CI_PROJECT_DIR/bright-agent-logs/" 2>/dev/null || true`);
+      L.push(`  artifacts:`);
+      L.push(`    name: bright-agent-logs`);
+      L.push(`    when: always`);
+      L.push(`    expire_in: 1 week`);
+      L.push(`    paths:`);
+      L.push(`      - bright-agent-logs/`);
+    }
     return L.join("\n");
   }
 
@@ -411,6 +438,24 @@
       L.push(`      BRIGHT_STEERING_PR_HEAD: \${{ parameters.steeringPrHead }}`);
       L.push(`      BRIGHT_STEERING_PR_BASE: \${{ parameters.steeringPrBase }}`);
     }
+    if (s.debug) {
+      // Stage the run log (~/.bright-agent/logs) into the artifact staging dir
+      // with a bash step so `~` expands, then publish it. Both steps use
+      // condition: always() so logs survive a failed run.
+      L.push(``);
+      L.push(`  - bash: |`);
+      L.push(`      mkdir -p "$(Build.ArtifactStagingDirectory)/bright-agent-logs"`);
+      L.push(`      cp -a ~/.bright-agent/logs/. "$(Build.ArtifactStagingDirectory)/bright-agent-logs/" 2>/dev/null || true`);
+      L.push(`    displayName: Collect Bright Agent logs`);
+      L.push(`    condition: always()`);
+      L.push(``);
+      L.push(`  - task: PublishPipelineArtifact@1`);
+      L.push(`    displayName: Upload Bright Agent logs`);
+      L.push(`    condition: always()`);
+      L.push(`    inputs:`);
+      L.push(`      targetPath: $(Build.ArtifactStagingDirectory)/bright-agent-logs`);
+      L.push(`      artifact: bright-agent-logs`);
+    }
     return L.join("\n");
   }
 
@@ -448,6 +493,15 @@
     scanKnobs(s).forEach(({ k, v }) => L.push(`            export ${k}=${shellQuote(v)}`));
     L.push(`            export BRIGHT_CI_TIMEOUT_MINUTES=${shellQuote(s.timeoutMinutes)}`);
     L.push(`            "/tmp/$ASSET"`);
+    if (s.debug) {
+      // Bitbucket only uploads artifacts from inside $BITBUCKET_CLONE_DIR, so
+      // copy the run log there in after-script (runs even when the step fails).
+      L.push(`        after-script:`);
+      L.push(`          - mkdir -p "$BITBUCKET_CLONE_DIR/bright-agent-logs"`);
+      L.push(`          - cp -a ~/.bright-agent/logs/. "$BITBUCKET_CLONE_DIR/bright-agent-logs/" 2>/dev/null || true`);
+      L.push(`        artifacts:`);
+      L.push(`          - bright-agent-logs/**`);
+    }
     L.push(`  services:`);
     L.push(`    docker:`);
     L.push(`      memory: 3072`);
@@ -501,6 +555,19 @@
     L.push(`      - run:`);
     L.push(`          name: Run Bright Agent`);
     L.push(`          command: LOCAL_REPO_PATH="$(pwd)" "/tmp/\${ASSET}"`);
+    if (s.debug) {
+      // Stage the run log (~/.bright-agent/logs) with `when: always` so it is
+      // captured on failure too, then store it as a downloadable artifact.
+      L.push(`      - run:`);
+      L.push(`          name: Collect Bright Agent logs`);
+      L.push(`          when: always`);
+      L.push(`          command: |`);
+      L.push(`            mkdir -p /tmp/bright-agent-logs`);
+      L.push(`            cp -a ~/.bright-agent/logs/. /tmp/bright-agent-logs/ 2>/dev/null || true`);
+      L.push(`      - store_artifacts:`);
+      L.push(`          path: /tmp/bright-agent-logs`);
+      L.push(`          destination: bright-agent-logs`);
+    }
     L.push(``);
     L.push(`workflows:`);
     if (t.schedule) {
@@ -560,6 +627,20 @@
     L.push(`      steps { sh 'LOCAL_REPO_PATH="\${WORKSPACE}" "\${WORKSPACE_TMP}/\${ASSET}"' }`);
     L.push(`    }`);
     L.push(`  }`);
+    if (s.debug) {
+      // archiveArtifacts can only see files under the workspace, so copy the
+      // run log (~/.bright-agent/logs) in first. `post { always }` runs even
+      // when a stage fails; allowEmptyArchive avoids failing on no logs.
+      L.push(`  post {`);
+      L.push(`    always {`);
+      L.push(`      sh '''`);
+      L.push(`        mkdir -p "\${WORKSPACE}/bright-agent-logs"`);
+      L.push(`        cp -a ~/.bright-agent/logs/. "\${WORKSPACE}/bright-agent-logs/" 2>/dev/null || true`);
+      L.push(`      '''`);
+      L.push(`      archiveArtifacts artifacts: 'bright-agent-logs/**', allowEmptyArchive: true`);
+      L.push(`    }`);
+      L.push(`  }`);
+    }
     L.push(`}`);
     return L.join("\n");
   }
@@ -717,6 +798,9 @@
     if (s.runMode === "validation") h += docSection("SAST validation", validationDoc(s));
     h += docSection("Runner prerequisites",
       `<p>The runner must have <b>Docker</b>, <b>Docker Compose</b>, <b>Git</b>, <code>curl</code> and <code>sha256sum</code>, and be able to reach the started app on <code>localhost</code>. A full scan builds and runs your whole app, so schedule baselines nightly rather than on every push.</p>`);
+    if (s.debug) {
+      h += `<div class="callout info"><span class="h">Logs are uploaded as an artifact</span>Verbose logging is on, so the full run log (<code>~/.bright-agent/logs/</code>) is uploaded as the <code>bright-agent-logs</code> CI artifact — kept even if the run fails. Secrets are redacted from the log. ${s.platform === "gitlab" || s.platform === "bitbucket" || s.platform === "jenkins" ? "The workflow copies it into the build workspace first, since this platform only collects artifacts from there." : ""}</div>`;
+    }
     return h;
   }
 
