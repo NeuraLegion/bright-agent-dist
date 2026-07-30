@@ -235,7 +235,7 @@ test("github: INFERENCE_URL is hardcoded, not read from a CI variable", () => {
   assert.ok(!/vars\.INFERENCE_URL/.test(y));
 });
 test("github: AI_MODEL is baked in (provider default when the field is blank)", () => {
-  assert.match(G.generateGitHub(st()), new RegExp(`AI_MODEL: ${G.PROVIDERS.openai.model}`));
+  assert.match(G.generateGitHub(st()), new RegExp(`AI_MODEL: "?${G.PROVIDERS.openai.model.replace(/,/g, ",")}"?`));
   assert.match(G.generateGitHub(st({ aiModel: "gpt-x" })), /AI_MODEL: gpt-x/);
 });
 test("github: validation + codeql injects CodeQL steps and SARIF_PATH", () => {
