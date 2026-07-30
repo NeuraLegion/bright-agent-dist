@@ -48,7 +48,7 @@
 
   const PROVIDERS = {
     openai:      { t: "OpenAI", url: "https://api.openai.com/v1", model: "gpt-5.4-mini" },
-    azure:       { t: "Azure OpenAI / Foundry", url: "https://<resource>.openai.azure.com/openai/v1", model: "gpt-5.4-mini" },
+    azure:       { t: "Azure OpenAI / Foundry", url: "https://<resource>.openai.azure.com/openai/v1", model: "gpt-5.4-mini,gpt-5.4" },
     anthropic:   { t: "Anthropic", url: "https://api.anthropic.com/v1", model: "claude-sonnet-5,claude-opus-4-8" },
     ollama:      { t: "Ollama (self-hosted)", url: "http://localhost:11434/v1", model: "llama3.1" },
     custom:      { t: "Custom OpenAI-compatible", url: "https://your-gateway.example.com/v1", model: "" },
