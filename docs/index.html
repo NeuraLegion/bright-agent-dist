@@ -187,6 +187,36 @@
   footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12px; }
   .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--navy); color:#fff; padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: .2s; z-index: 50; }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* Credential validation modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(25,29,52,.55); display: none; align-items: flex-start; justify-content: center; padding: 44px 16px; z-index: 60; overflow: auto; }
+  .modal-overlay.show { display: flex; }
+  .modal { background: var(--card); border-radius: var(--radius); box-shadow: 0 20px 60px rgba(25,29,52,.35); width: 100%; max-width: 580px; overflow: hidden; }
+  .modal .m-head { display: flex; align-items: center; gap: 10px; padding: 15px 20px; border-bottom: 1px solid var(--line); }
+  .modal .m-head h2 { margin: 0; font-size: 16px; color: var(--navy); font-weight: 800; }
+  .modal .m-head .x { margin-left: auto; border: none; background: none; font-size: 22px; line-height: 1; cursor: pointer; color: var(--muted); padding: 0 4px; }
+  .modal .m-body { padding: 16px 20px; }
+  .cred { border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .cred:last-child { margin-bottom: 0; }
+  .cred h3 { margin: 0 0 3px; font-size: 14px; color: var(--navy); }
+  .cred .meta { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .cred .row { display: flex; gap: 8px; }
+  .cred input[type=password], .cred input[type=text] { flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; }
+  .cred input:focus { outline: none; border-color: var(--magenta); box-shadow: 0 0 0 3px rgba(226,91,197,.12); }
+  .cred .reveal { border: 1px solid var(--line); background: #fff; border-radius: 9px; padding: 0 11px; cursor: pointer; font-size: 12px; color: var(--muted); }
+  .cred .reveal:hover { border-color: #d5d7e6; }
+  .status { margin-top: 11px; font-size: 12.5px; display: none; padding: 9px 11px; border-radius: 9px; border-left: 3px solid var(--muted); background: var(--bg); line-height: 1.45; }
+  .status.show { display: block; }
+  .status.ok { border-color: #2e9e5b; background: #f0faf3; color: #216e42; }
+  .status.err { border-color: #d64545; background: #fdf1f1; color: #9a2c2c; }
+  .status.warn { border-color: var(--gold); background: var(--gold-tint); color: #7a6100; }
+  .status.info { border-color: var(--magenta); background: var(--magenta-tint); color: var(--slate); }
+  .status code { font-family: "JetBrains Mono", monospace; font-size: 11.5px; }
+  .status pre { margin: 8px 0 0; padding: 10px; background: #0f1222; color: #e6e8f2; border-radius: 8px; overflow: auto; font-family: "JetBrains Mono", monospace; font-size: 11.5px; white-space: pre; }
+  pre.curl { margin: 0 0 10px; padding: 11px 12px; background: #0f1222; color: #e6e8f2; border-radius: 9px; overflow: auto; font-family: "JetBrains Mono", monospace; font-size: 11.5px; line-height: 1.5; white-space: pre; }
+  .m-foot { padding: 12px 20px 18px; font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--line); }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(0,0,0,.15); border-top-color: var(--magenta); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 7px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -212,6 +242,7 @@
           <div class="out-head">
             <span class="file" id="out-file">.github/workflows/bright-agent.yml</span>
             <span class="spacer"></span>
+            <button class="btn" id="btn-validate" type="button">Validate tokens</button>
             <button class="btn" id="btn-copy" type="button">Copy</button>
             <button class="btn primary" id="btn-download" type="button">Download</button>
           </div>
@@ -229,6 +260,36 @@
   STAR ships as a self-contained binary from <a href="https://github.com/NeuraLegion/bright-agent-dist">bright-agent-dist</a>.
   Templates mirror <span class="path">examples/ci/</span>. Generated files use the latest release by default — pin a version for reproducible runs.
 </footer>
+
+<div class="modal-overlay" id="cred-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cred-title">
+    <div class="m-head">
+      <h2 id="cred-title">Validate credentials</h2>
+      <button class="x" id="cred-close" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="m-body">
+      <div class="cred">
+        <h3>Inference token</h3>
+        <div class="meta" id="cred-inf-meta"></div>
+        <div class="row">
+          <input id="cred-inf-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="INFERENCE_TOKEN" />
+          <button class="reveal" data-for="cred-inf-token" type="button">Show</button>
+          <button class="btn primary" id="cred-inf-check" type="button">Check</button>
+        </div>
+        <div class="status" id="cred-inf-status"></div>
+      </div>
+      <div class="cred">
+        <h3>Bright token</h3>
+        <div class="meta">The Bright API can't be validated from the browser — its CORS policy blocks third-party origins and the auth header. Run this in a terminal: <code>200</code> = the token works for <code id="cred-bright-host">app.brightsec.com</code>, <code>401</code> = it doesn't.</div>
+        <pre class="curl" id="cred-bright-curl"></pre>
+        <button class="btn" id="cred-bright-copy" type="button">Copy command</button>
+      </div>
+    </div>
+    <div class="m-foot">
+      The inference token stays in this browser tab, is sent only to the endpoint you're checking, and is cleared when you close this dialog. Nothing is stored, logged, or proxied. The Bright command runs in your own terminal.
+    </div>
+  </div>
+</div>
 
 <div class="toast" id="toast">Copied</div>
 
@@ -411,6 +472,7 @@ function renderForm() {
   if (usesPR() || S.triggers.push) adv.push(textField("Default branch", "Used for PR base / push trigger.", S.defaultBranch, (v) => { S.defaultBranch = v; }, "main"));
   adv.push(textField("Monorepo service root (optional)", "BRIGHT_SERVICE_ROOT — usually auto-detected.", S.serviceRoot, (v) => { S.serviceRoot = v; }, "apps/monolith"));
   adv.push(textField("Self-hosted SCM override (optional)", "BRIGHT_SCM_PLATFORM for GitHub Enterprise / self-managed GitLab.", S.scmOverride, (v) => { S.scmOverride = v; }, "github | gitlab | azure-devops"));
+  adv.push(textField("Bright hostname (optional)", "BRIGHT_HOSTNAME — your Bright cluster host. Blank = app.brightsec.com. Set for EU / dedicated / self-hosted.", S.brightHostname, (v) => { S.brightHostname = v; }, "eu.brightsec.com"));
   if (S.platform !== "github") adv.push(textField("CI timeout minutes", "BRIGHT_CI_TIMEOUT_MINUTES — checkpoint before the runner is killed.", S.timeoutMinutes, (v) => { S.timeoutMinutes = v; }, "60"));
   adv.push(el("div", { class: "field" }, [toggleRow("Verbose logging", "Set BRIGHT_DEBUG=1 to mirror the full log to the console, and upload the run log as a CI artifact (bright-agent-logs).", S.debug, (v) => { S.debug = v; })]));
   root.appendChild(card("Advanced", "optional", adv));
@@ -467,6 +529,68 @@ document.getElementById("btn-copy").addEventListener("click", copyYaml);
 document.getElementById("btn-download").addEventListener("click", downloadFile);
 document.getElementById("tab-yaml").addEventListener("click", () => switchTab("yaml"));
 document.getElementById("tab-doc").addEventListener("click", () => switchTab("doc"));
+
+// --- credential validation (runs entirely in this tab) ----------------------
+const credModal = document.getElementById("cred-modal");
+function credStatus(id, level, html) {
+  const n = document.getElementById(id);
+  n.className = "status show " + level;
+  n.innerHTML = html;
+}
+function credBusy(id, label) { credStatus(id, "info", `<span class="spin"></span>${label}`); }
+function openCred() {
+  const plan = G.inferenceCheckPlan(S, "");
+  document.getElementById("cred-inf-meta").innerHTML =
+    `Read-only check: <code>GET ${esc(plan.url)}</code> (no tokens spent). Confirms auth and that model <code>${esc(plan.model || "provider default")}</code> is available.`;
+  // Bright can't be checked in-browser (CORS) — show the terminal command instead.
+  document.getElementById("cred-bright-curl").textContent = G.brightCurl(S);
+  document.getElementById("cred-bright-host").textContent = G.brightHost(S);
+  credModal.classList.add("show");
+  document.getElementById("cred-inf-token").focus();
+}
+function closeCred() {
+  credModal.classList.remove("show");
+  // Wipe the inference secret and result from the DOM when the dialog closes.
+  document.getElementById("cred-inf-token").value = "";
+  const n = document.getElementById("cred-inf-status"); n.className = "status"; n.innerHTML = "";
+}
+
+document.getElementById("btn-validate").addEventListener("click", openCred);
+document.getElementById("cred-close").addEventListener("click", closeCred);
+credModal.addEventListener("click", (e) => { if (e.target === credModal) closeCred(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && credModal.classList.contains("show")) closeCred(); });
+document.querySelectorAll(".reveal").forEach((b) => b.addEventListener("click", () => {
+  const inp = document.getElementById(b.getAttribute("data-for"));
+  const wasHidden = inp.type === "password";
+  inp.type = wasHidden ? "text" : "password";
+  b.textContent = wasHidden ? "Hide" : "Show";
+}));
+
+document.getElementById("cred-inf-check").addEventListener("click", async () => {
+  const token = document.getElementById("cred-inf-token").value.trim();
+  if (!token) { credStatus("cred-inf-status", "warn", "Enter your INFERENCE_TOKEN first."); return; }
+  const plan = G.inferenceCheckPlan(S, token);
+  credBusy("cred-inf-status", `Contacting <code>${esc(plan.url)}</code> …`);
+  try {
+    const res = await fetch(plan.url, { method: plan.method, headers: plan.headers });
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* non-JSON body */ }
+    const r = G.interpretModelsResponse(res.status, body, plan.model);
+    credStatus("cred-inf-status", r.level, esc(r.msg));
+  } catch (e) {
+    credStatus("cred-inf-status", "warn",
+      `Couldn't reach the endpoint from the browser — usually CORS, or the endpoint is on <code>localhost</code>/a private network. This does <b>not</b> mean the token is wrong: the agent runs server-side and isn't subject to browser CORS.`);
+  }
+});
+
+document.getElementById("cred-bright-copy").addEventListener("click", () => {
+  const cmd = document.getElementById("cred-bright-curl").textContent;
+  navigator.clipboard.writeText(cmd).then(() => showToast("Command copied")).catch(() => {
+    const ta = el("textarea", {}); ta.value = cmd; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); showToast("Command copied"); } catch (e) {} ta.remove();
+  });
+});
+
 refresh(true);
 </script>
 </body>
