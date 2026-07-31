@@ -84,6 +84,7 @@
       sarifPath: "",
       debug: false,
       scmOverride: "",
+      brightHostname: "",
       timeoutMinutes: "60",
     };
   }
@@ -120,6 +121,9 @@
     if (aiModel) out.push({ k: "AI_MODEL", v: aiModel });
     if ((s.serviceRoot || "").trim()) out.push({ k: "BRIGHT_SERVICE_ROOT", v: s.serviceRoot.trim() });
     if ((s.scmOverride || "").trim()) out.push({ k: "BRIGHT_SCM_PLATFORM", v: s.scmOverride.trim() });
+    // BRIGHT_HOSTNAME overrides the default Bright cluster host (app.brightsec.com)
+    // for EU/dedicated/self-hosted clusters. Non-secret, so baked into the file.
+    if ((s.brightHostname || "").trim()) out.push({ k: "BRIGHT_HOSTNAME", v: s.brightHostname.trim() });
     if (s.debug) out.push({ k: "BRIGHT_DEBUG", v: "1" });
     return out;
   }
@@ -788,6 +792,9 @@
     h += docSection("2 · Add secrets & variables", `<p>Add these in <b>${esc(SETTINGS_LOC[s.platform])}</b>:</p>${tbl}`);
     const effModel = (s.aiModel || "").trim() || (PROVIDERS[s.provider] && PROVIDERS[s.provider].model) || "";
     h += `<div class="callout info"><span class="h">Inference is set in the file</span><code>INFERENCE_URL</code> (<code>${esc(s.inferenceUrl)}</code>)${effModel ? ` and <code>AI_MODEL</code> (<code>${esc(effModel)}</code>)` : ""} ${effModel ? "are" : "is"} written straight into the workflow from your selections above — no CI variable to add. Edit the file to change ${effModel ? "them" : "it"}.</div>`;
+    if ((s.brightHostname || "").trim()) {
+      h += `<div class="callout info"><span class="h">Custom Bright cluster</span><code>BRIGHT_HOSTNAME</code> (<code>${esc(s.brightHostname.trim())}</code>) is written into the workflow, pointing STAR at your cluster instead of the default <code>app.brightsec.com</code>. Leave the field blank to use the default.</div>`;
+    }
     if (s.platform === "jenkins") {
       h += `<p>Use these credential IDs: <code>bright-token</code>, <code>repo-access-token</code>, <code>inference-token</code>.</p>`;
     }
@@ -802,6 +809,107 @@
       h += `<div class="callout info"><span class="h">Logs are uploaded as an artifact</span>Verbose logging is on, so the full run log (<code>~/.bright-agent/logs/</code>) is uploaded as the <code>bright-agent-logs</code> CI artifact — kept even if the run fails. Secrets are redacted from the log. ${s.platform === "gitlab" || s.platform === "bitbucket" || s.platform === "jenkins" ? "The workflow copies it into the build workspace first, since this platform only collects artifacts from there." : ""}</div>`;
     }
     return h;
+  }
+
+  // -------------------------------------------------------------------------
+  // Credential validation (pure helpers)
+  //
+  // These build the request specs and interpret the responses; the actual
+  // fetch()/DOM wiring lives in index.html. Everything runs in the user's
+  // browser and talks straight to the chosen endpoint — nothing is stored or
+  // proxied. CORS reality (verified): OpenAI and Anthropic (with its
+  // browser-access header) allow direct browser calls; other OpenAI-compatible
+  // endpoints work when they send CORS headers. The Bright API does not expose
+  // responses to a third-party origin, so the Bright check degrades to a
+  // copy-paste curl command.
+  // -------------------------------------------------------------------------
+
+  const BRIGHT_DEFAULT_HOST = "app.brightsec.com";
+
+  function brightHost(s) {
+    return (s.brightHostname || "").trim() || BRIGHT_DEFAULT_HOST;
+  }
+
+  /**
+   * Read-only inference probe: list the models the endpoint serves. No
+   * generation, so it costs no tokens and is independent of per-model
+   * generation params (e.g. gpt-5.x rejects `max_tokens` and wants
+   * `max_completion_tokens`). Confirms the endpoint, the token, and — via
+   * interpretModelsResponse — whether the configured model is available.
+   */
+  function inferenceCheckPlan(s, token) {
+    const base = (s.inferenceUrl || "").trim().replace(/\/+$/, "");
+    const chain = ((s.aiModel || "").trim() || (PROVIDERS[s.provider] && PROVIDERS[s.provider].model) || "");
+    const model = chain.split(",")[0].trim();
+    let host = "";
+    try { host = new URL(base).host.toLowerCase(); } catch (e) { host = ""; }
+    const isAnthropic = s.provider === "anthropic" || /(^|\.)anthropic\.com$/.test(host);
+
+    if (isAnthropic) {
+      return {
+        kind: "anthropic",
+        model,
+        method: "GET",
+        url: base + "/models",
+        headers: {
+          "x-api-key": token,
+          "anthropic-version": "2023-06-01",
+          // Required for direct browser calls (Anthropic gates CORS behind it).
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+      };
+    }
+    // OpenAI-compatible (OpenAI, Azure OpenAI/Foundry, Ollama, custom gateways).
+    return {
+      kind: "openai",
+      model,
+      method: "GET",
+      url: base + "/models",
+      headers: { "authorization": `Bearer ${token}` },
+    };
+  }
+
+  /** True if `model` matches an id in the returned list (exact or version-suffixed). */
+  function modelInList(ids, model) {
+    if (!model) return false;
+    return ids.some((id) => id === model || id.startsWith(model + "-") || model.startsWith(id + "-"));
+  }
+
+  /**
+   * Interpret a GET /models response. `body` is the parsed JSON (or null);
+   * OpenAI/Anthropic both return `{ data: [{ id }] }`.
+   */
+  function interpretModelsResponse(status, body, model) {
+    if (status === 401 || status === 403) return { ok: false, level: "err", msg: `Auth rejected (HTTP ${status}) — check INFERENCE_TOKEN.` };
+    if (status === 404 || status === 405) return { ok: false, level: "warn", msg: `HTTP ${status} — this endpoint doesn't expose a model list to the browser; couldn't verify the model here.` };
+    if (status === 429) return { ok: true, level: "warn", msg: "HTTP 429 — reachable and authorized, but rate-limited right now." };
+    if (status < 200 || status >= 300) return { ok: false, level: "warn", msg: `HTTP ${status} from the endpoint.` };
+
+    const ids = Array.isArray(body && body.data) ? body.data.map((m) => m && m.id).filter(Boolean) : [];
+    if (!ids.length) return { ok: true, level: "ok", msg: `Reachable and authorized${model ? ` (no model list returned to check "${model}" against)` : ""}.` };
+    if (!model) return { ok: true, level: "ok", msg: `Reachable and authorized — ${ids.length} models available.` };
+    if (modelInList(ids, model)) return { ok: true, level: "ok", msg: `Reachable, authorized, and model "${model}" is available.` };
+    return { ok: false, level: "warn", msg: `Authorized, but "${model}" isn't among the ${ids.length} available models — check AI_MODEL.` };
+  }
+
+  /** A lightweight authenticated Bright endpoint used to prove token + host. */
+  function brightCheckUrl(s) {
+    return `https://${brightHost(s)}/api/v1/projects?limit=1`;
+  }
+
+  /**
+   * Copy-paste curl for validating a Bright token from a terminal. The Bright
+   * API can't be checked from the browser (its CORS policy blocks third-party
+   * origins and the Authorization header), so the UI shows this command
+   * instead. Uses the $BRIGHT_TOKEN env var rather than inlining the secret.
+   */
+  function brightCurl(s) {
+    return [
+      `export BRIGHT_TOKEN=...   # your Bright API token`,
+      `curl -sS -o /dev/null -w "%{http_code}\\n" \\`,
+      `  -H "Authorization: Api-Key $BRIGHT_TOKEN" \\`,
+      `  "${brightCheckUrl(s)}"`,
+    ].join("\n");
   }
 
   // -------------------------------------------------------------------------
@@ -836,6 +944,8 @@
     generateYaml, fileName, codeLang,
     // docs
     secretRows, summaryLine, repoAccessDoc, platformExtraDoc, steeringDoc, validationDoc, generateDoc,
+    // credential validation
+    brightHost, inferenceCheckPlan, modelInList, interpretModelsResponse, brightCheckUrl, brightCurl,
     // highlight
     highlight, keyHighlight,
   };

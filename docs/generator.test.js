@@ -98,6 +98,11 @@ test("scanKnobs passes AI_MODEL, service root, scm override, debug", () => {
   assert.equal(map.BRIGHT_SCM_PLATFORM, "gitlab");
   assert.equal(map.BRIGHT_DEBUG, "1");
 });
+test("scanKnobs omits BRIGHT_HOSTNAME by default, emits (trimmed) when set", () => {
+  assert.ok(!G.scanKnobs(st()).some((x) => x.k === "BRIGHT_HOSTNAME"));
+  const v = G.scanKnobs(st({ brightHostname: "  eu.brightsec.com  " })).find((x) => x.k === "BRIGHT_HOSTNAME");
+  assert.equal(v.v, "eu.brightsec.com");
+});
 
 // ---------------------------------------------------------------------------
 // Small pure helpers
@@ -399,6 +404,91 @@ test("jenkins: debug archives logs in a post-always block", () => {
 test("doc: debug adds the log-artifact callout", () => {
   assert.match(G.generateDoc(st({ debug: true })), /Logs are uploaded as an artifact/);
   assert.ok(!/Logs are uploaded as an artifact/.test(G.generateDoc(st({ debug: false }))));
+});
+
+// ---------------------------------------------------------------------------
+// BRIGHT_HOSTNAME (optional cluster override, baked into the file)
+// ---------------------------------------------------------------------------
+test("no platform emits BRIGHT_HOSTNAME when the field is blank", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const y = G.generateYaml(st({ platform, triggers: only(...G.PLATFORMS[platform].triggers) }));
+    assert.ok(!/BRIGHT_HOSTNAME/.test(y), `${platform} has no BRIGHT_HOSTNAME by default`);
+  }
+});
+test("every platform bakes BRIGHT_HOSTNAME into the file when set", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const y = G.generateYaml(st({ platform, triggers: only(...G.PLATFORMS[platform].triggers), brightHostname: "eu.brightsec.com" }));
+    assert.match(y, /BRIGHT_HOSTNAME/, `${platform} references BRIGHT_HOSTNAME`);
+    assert.match(y, /eu\.brightsec\.com/, `${platform} contains the hostname value`);
+  }
+});
+test("doc: custom-cluster callout only when BRIGHT_HOSTNAME is set", () => {
+  assert.ok(!/Custom Bright cluster/.test(G.generateDoc(st())));
+  assert.match(G.generateDoc(st({ brightHostname: "eu.brightsec.com" })), /Custom Bright cluster/);
+});
+
+// ---------------------------------------------------------------------------
+// Credential validation helpers
+// ---------------------------------------------------------------------------
+test("inferenceCheckPlan: OpenAI-compatible is a GET /models read check with Bearer auth", () => {
+  const plan = G.inferenceCheckPlan(st({ provider: "openai", inferenceUrl: "https://api.openai.com/v1/", aiModel: "gpt-5.4-mini" }), "sk-test");
+  assert.equal(plan.kind, "openai");
+  assert.equal(plan.method, "GET");
+  assert.equal(plan.url, "https://api.openai.com/v1/models");
+  assert.equal(plan.headers.authorization, "Bearer sk-test");
+  assert.equal(plan.model, "gpt-5.4-mini");
+  assert.ok(!plan.body, "no body — read-only, no generation params");
+});
+test("inferenceCheckPlan: anthropic uses GET /models with the browser-access header", () => {
+  const plan = G.inferenceCheckPlan(st({ provider: "anthropic", inferenceUrl: "https://api.anthropic.com/v1" }), "k");
+  assert.equal(plan.kind, "anthropic");
+  assert.equal(plan.method, "GET");
+  assert.equal(plan.url, "https://api.anthropic.com/v1/models");
+  assert.equal(plan.model, "claude-sonnet-5"); // first of "claude-sonnet-5,claude-opus-4-8"
+  assert.equal(plan.headers["x-api-key"], "k");
+  assert.equal(plan.headers["anthropic-dangerous-direct-browser-access"], "true");
+  assert.ok(!plan.headers.authorization);
+});
+test("inferenceCheckPlan: anthropic is detected by host even for provider=custom", () => {
+  const plan = G.inferenceCheckPlan(st({ provider: "custom", inferenceUrl: "https://api.anthropic.com/v1", aiModel: "claude-x" }), "k");
+  assert.equal(plan.kind, "anthropic");
+  assert.equal(plan.url, "https://api.anthropic.com/v1/models");
+});
+test("modelInList matches exact and version-suffixed ids, avoids false prefixes", () => {
+  assert.ok(G.modelInList(["gpt-5.4-mini"], "gpt-5.4-mini"));
+  assert.ok(G.modelInList(["gpt-5.4-mini-2026-03-17"], "gpt-5.4-mini")); // dated variant
+  assert.ok(G.modelInList(["gpt-5.4-mini"], "gpt-5.4-mini-2026-03-17")); // config pins a dated id
+  assert.ok(!G.modelInList(["gpt-4o"], "gpt-4")); // must not treat gpt-4o as gpt-4
+  assert.ok(!G.modelInList([], "gpt-4o"));
+});
+test("interpretModelsResponse: auth failures and model presence", () => {
+  assert.equal(G.interpretModelsResponse(401, null, "m").level, "err");
+  assert.equal(G.interpretModelsResponse(403, null, "m").level, "err");
+  assert.equal(G.interpretModelsResponse(404, null, "m").level, "warn");
+  assert.equal(G.interpretModelsResponse(429, null, "m").ok, true);
+  const ok = G.interpretModelsResponse(200, { data: [{ id: "gpt-5.4-mini" }] }, "gpt-5.4-mini");
+  assert.equal(ok.ok, true); assert.equal(ok.level, "ok");
+  const missing = G.interpretModelsResponse(200, { data: [{ id: "gpt-4o" }, { id: "gpt-4.1" }] }, "gpt-5.4-mini");
+  assert.equal(missing.ok, false); assert.equal(missing.level, "warn");
+  assert.match(missing.msg, /isn't among the 2 available models/);
+  const noModel = G.interpretModelsResponse(200, { data: [{ id: "a" }, { id: "b" }] }, "");
+  assert.match(noModel.msg, /2 models available/);
+  const emptyList = G.interpretModelsResponse(200, { data: [] }, "m");
+  assert.equal(emptyList.ok, true);
+});
+test("brightHost defaults to app.brightsec.com, honors override", () => {
+  assert.equal(G.brightHost(st()), "app.brightsec.com");
+  assert.equal(G.brightHost(st({ brightHostname: " eu.brightsec.com " })), "eu.brightsec.com");
+});
+test("brightCheckUrl targets an authenticated endpoint on the chosen host", () => {
+  assert.equal(G.brightCheckUrl(st()), "https://app.brightsec.com/api/v1/projects?limit=1");
+  assert.equal(G.brightCheckUrl(st({ brightHostname: "eu.brightsec.com" })), "https://eu.brightsec.com/api/v1/projects?limit=1");
+});
+test("brightCurl emits a runnable Api-Key curl for the chosen host", () => {
+  const c = G.brightCurl(st({ brightHostname: "eu.brightsec.com" }));
+  assert.match(c, /export BRIGHT_TOKEN=/);
+  assert.match(c, /Authorization: Api-Key \$BRIGHT_TOKEN/);
+  assert.match(c, /https:\/\/eu\.brightsec\.com\/api\/v1\/projects\?limit=1/);
 });
 
 // ---------------------------------------------------------------------------
