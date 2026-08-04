@@ -950,9 +950,6 @@
     return p.t.replace(" / Foundry", "").replace(" (self-hosted)", "");
   }
 
-  /** Host shown on the Bright cloud node; mirrors BRIGHT_HOSTNAME's default. */
-  const BRIGHT_HOST = "app.brightsec.com";
-
   /**
    * Builds the node/edge model for the current state. Returned separately from
    * the SVG so tests can assert on structure rather than parsing markup.
@@ -987,7 +984,10 @@
 
       // --- outside
       { id: "cloud", zone: "out", x: 610, y: 184, w: 190, h: 66, kind: "cloud",
-        t: "Bright DAST engine", d: "attacks · findings · retest", d2: BRIGHT_HOST },
+        // brightHost(s) resolves BRIGHT_HOSTNAME, so a custom cluster (EU,
+        // dedicated) is shown here rather than the default. The engine is always
+        // outside the runner, so its zone never changes.
+        t: "Bright DAST engine", d: "attacks · findings · retest", d2: brightHost(s) },
     ];
 
     // Validation mode has no fix loop, so nothing is written back and the SCM

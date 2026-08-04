@@ -719,3 +719,22 @@ test("diagram: attribution — Bright finds, the model engineers", () => {
   assert.match(cap, /found, exploited and re-validated by Bright/);
   assert.match(cap, /model's job is the engineering/);
 });
+
+test("diagram: the engine node shows the cluster the workflow actually targets", () => {
+  const host = (s) => G.diagramModel(s).nodes.find((n) => n.id === "cloud").d2;
+
+  assert.equal(host(G.defaultState()), "app.brightsec.com");
+  assert.equal(host({ ...G.defaultState(), brightHostname: "eu.brightsec.com" }), "eu.brightsec.com");
+  assert.equal(host({ ...G.defaultState(), brightHostname: "  dedicated.brightsec.com  " }),
+    "dedicated.brightsec.com", "whitespace is trimmed, as brightHost does");
+
+  // The label is a boundary claim, so it must agree with the workflow file.
+  const s = { ...G.defaultState(), brightHostname: "eu.brightsec.com" };
+  assert.match(G.generateYaml(s), /BRIGHT_HOSTNAME/);
+  assert.match(G.generateDiagram(s), /eu\.brightsec\.com/);
+  assert.equal(/app\.brightsec\.com/.test(G.generateDiagram(s)), false,
+    "the default host must not appear once a cluster is set");
+
+  // No self-hosted Bright option exists, so the engine is always outside.
+  assert.equal(G.diagramModel(s).nodes.find((n) => n.id === "cloud").zone, "out");
+});
