@@ -592,7 +592,8 @@ test("diagram: test traffic is a local edge from the agent to the app", () => {
   assert.ok(e, "agent -> target edge exists");
   assert.equal(e.kind, "attack");
   assert.ok(!e.crosses, "test traffic must never cross the runner boundary");
-  assert.match(e.label, /test traffic/);
+  assert.match(e.label, /Bright test traffic/,
+    "the traffic hitting the app is Bright's testing, not the agent's own");
 });
 
 test("diagram: every outbound edge starts inside the runner", () => {
@@ -643,7 +644,9 @@ test("diagram: the harness replaces the booted app", () => {
   const h = G.diagramModel({ ...G.defaultState(), runMode: "function" });
   const target = h.nodes.find((n) => n.id === "target");
   assert.match(target.t, /harness/i);
-  assert.match(edgeBetween(h, "agent", "target").label, /wrap/);
+  assert.match(target.d, /wrapped functions/);
+  assert.equal(edgeBetween(h, "agent", "target").kind, "attack",
+    "Bright still drives the testing against the harness");
 });
 
 test("diagram: no node overlaps or dangling edges in any combination", () => {
@@ -691,4 +694,28 @@ test("diagram: caption states the local-traffic and outbound-only guarantees", (
   const cap = G.diagramCaption(G.defaultState());
   assert.match(cap, /never leaves your network/);
   assert.match(cap, /no inbound firewall port/);
+});
+
+test("diagram: attribution — Bright finds, the model engineers", () => {
+  const m = G.diagramModel(G.defaultState());
+  const agent = m.nodes.find((n) => n.id === "agent");
+  const cloud = m.nodes.find((n) => n.id === "cloud");
+
+  // The agent must not claim the scanning; that is the engine's job.
+  assert.equal(/scan|attack|find/i.test(agent.d), false,
+    `agent subtitle must not claim scanning: ${agent.d}`);
+  assert.match(agent.d, /build|discover|fix/);
+
+  // The engine must be named as the source of attacks and findings.
+  assert.match(cloud.t, /DAST/);
+  assert.match(cloud.d, /attacks/);
+  assert.match(cloud.d, /findings/);
+
+  // The model receives findings, it does not produce them.
+  const llm = edgeBetween(m, "agent", "llm");
+  assert.equal(/findings\b/.test(llm.label) && !/code/.test(llm.label), false);
+
+  const cap = G.diagramCaption(G.defaultState());
+  assert.match(cap, /found, exploited and re-validated by Bright/);
+  assert.match(cap, /model's job is the engineering/);
 });

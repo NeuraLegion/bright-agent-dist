@@ -981,13 +981,13 @@
       { id: "repo", zone: "in", x: 34, y: 200, w: 150, h: 52, kind: "repo",
         t: "Repo checkout", d: s.scope === "full" ? "full repo" : (s.scope === "changed" ? "changed files" : "diff or full") },
       { id: "agent", zone: "in", x: 236, y: 116, w: 166, h: 52, kind: "agent",
-        t: "Bright Agent", d: "analyse · scan · fix" },
+        t: "Bright Agent", d: "build · discover · fix", d2: "AI-driven" },
       { id: "target", zone: "in", x: 236, y: 200, w: 166, h: 52, kind: "app",
         t: harness ? "Function harness" : "Target app", d: harness ? "wrapped functions" : "Docker Compose" },
 
       // --- outside
-      { id: "cloud", zone: "out", x: 610, y: 190, w: 190, h: 60, kind: "cloud",
-        t: "Bright cloud", d: BRIGHT_HOST },
+      { id: "cloud", zone: "out", x: 610, y: 184, w: 190, h: 66, kind: "cloud",
+        t: "Bright DAST engine", d: "attacks · findings · retest", d2: BRIGHT_HOST },
     ];
 
     // Validation mode has no fix loop, so nothing is written back and the SCM
@@ -1029,11 +1029,11 @@
       { from: "ci", to: "agent", kind: "control" },
       { from: "repo", to: "agent", kind: "data" },
       { from: "agent", to: "target", kind: "attack",
-        label: harness ? "wrap · test traffic" : "boot · test traffic" },
+        label: "Bright test traffic" },
       { from: "agent", to: "cloud", kind: "tunnel", crosses: true, lane: 500,
-        label: "outbound only" },
+        label: "outbound only · findings" },
       { from: "agent", to: "llm", kind: "llm", crosses: !selfHostedLlm, lane: 578,
-        label: selfHostedLlm ? "inference" : "code + findings" },
+        label: selfHostedLlm ? "inference" : "code · analysis" },
     ];
 
     if (validation) edges.push({ from: "sarif", to: "agent", kind: "data", label: "to confirm" });
@@ -1116,9 +1116,12 @@
     const bits = [];
     bits.push("Your application and its source stay on the runner. The agent drives test traffic at the app locally — that traffic never leaves your network.");
     bits.push("Every connection outward is initiated from inside your runner over WSS/443, so no inbound firewall port is opened and no address needs allowlisting.");
+    bits.push("Vulnerabilities are found, exploited and re-validated by Bright's DAST engine. "
+      + "The model's job is the engineering around it: understanding the stack, building and booting the app, "
+      + "discovering endpoints, and writing the fixes.");
     bits.push(m.selfHostedLlm
-      ? `Inference runs on ${providerLabel(s)} inside your network, so no code or findings reach a third-party model.`
-      : `Code snippets and findings are sent to ${providerLabel(s)} for analysis.`);
+      ? `That inference runs on ${providerLabel(s)} inside your network, so no code or findings reach a third-party model.`
+      : `Code and findings are sent to ${providerLabel(s)} for that reasoning.`);
     if (m.validation) bits.push("Validation mode confirms SARIF findings against the live app and writes nothing back.");
     return bits.join(" ");
   }
