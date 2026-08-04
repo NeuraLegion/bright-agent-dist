@@ -920,6 +920,271 @@
     out = out.replace(/(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)/g, '<span class="s">$1</span>');
     return out;
   }
+  // -------------------------------------------------------------------------
+  // Architecture diagram
+  //
+  // A pure state -> inline SVG renderer. No external assets and no layout
+  // engine: the node set is small and fixed, so positions are hand-placed on a
+  // grid and only visibility, labels and edges vary with the selection.
+  //
+  // The diagram exists to answer one question the YAML cannot: what crosses the
+  // boundary of your CI runner. Everything inside the dashed box stays on your
+  // infrastructure. Getting an edge direction wrong here would misinform, so the
+  // directions are asserted in generator.test.js.
+  //
+  // Reference: https://docs.brightsec.com/docs/on-premises-repeater-local-agent
+  //   "The Repeater is using WebSocket and HTTPS (443) ... without having to
+  //    allowlist the Bright IP address in your firewall for incoming traffic"
+  //   "all requests are sent from the Bright cloud through a Repeater to the
+  //    local target"
+  // -------------------------------------------------------------------------
+
+  const DIAGRAM_W = 900;
+  const DIAGRAM_H = 400;
+
+  /** Short label for the node representing the LLM endpoint. */
+  function providerLabel(s) {
+    const p = PROVIDERS[s.provider];
+    if (!p) return "LLM endpoint";
+    if (s.provider === "custom") return "Your LLM gateway";
+    return p.t.replace(" / Foundry", "").replace(" (self-hosted)", "");
+  }
+
+  /**
+   * Builds the node/edge model for the current state. Returned separately from
+   * the SVG so tests can assert on structure rather than parsing markup.
+   */
+  function diagramModel(s) {
+    const P = PLATFORMS[s.platform];
+    const selfHostedLlm = s.provider === "ollama";
+    const validation = s.runMode === "validation";
+    const harness = s.runMode === "function";
+    const trig = activeTriggers(s);
+
+    // Abbreviated so the text fits the node box; the summary line above the
+    // diagram carries the full wording.
+    const TRIG_SHORT = { pr: P.prWord === "Merge request" ? "MR" : "PR", push: "push",
+      schedule: "nightly", manual: "manual", steering: "comment" };
+    const trigShort = (trig.length ? trig : ["manual"]).map((t) => TRIG_SHORT[t] || t);
+    const trigLine1 = trigShort.slice(0, 2).join(" · ");
+    const trigLine2 = trigShort.slice(2).join(" · ");
+
+    const nodes = [
+      // --- inside the runner boundary
+      { id: "trigger", zone: "in", x: 34, y: 36, w: 150, h: 56, kind: "trigger",
+        t: "Trigger", d: trigLine1, d2: trigLine2 },
+      { id: "ci", zone: "in", x: 34, y: 116, w: 150, h: 52, kind: "ci",
+        t: P.name, d: "runner" },
+      { id: "repo", zone: "in", x: 34, y: 200, w: 150, h: 52, kind: "repo",
+        t: "Repo checkout", d: s.scope === "full" ? "full repo" : (s.scope === "changed" ? "changed files" : "diff or full") },
+      { id: "agent", zone: "in", x: 236, y: 116, w: 166, h: 52, kind: "agent",
+        t: "Bright Agent", d: "build · discover · fix", d2: "AI-driven" },
+      { id: "target", zone: "in", x: 236, y: 200, w: 166, h: 52, kind: "app",
+        t: harness ? "Function harness" : "Target app", d: harness ? "wrapped functions" : "Docker Compose" },
+
+      // --- outside
+      { id: "cloud", zone: "out", x: 610, y: 184, w: 190, h: 66, kind: "cloud",
+        // brightHost(s) resolves BRIGHT_HOSTNAME, so a custom cluster (EU,
+        // dedicated) is shown here rather than the default. The engine is always
+        // outside the runner, so its zone never changes.
+        t: "Bright DAST engine", d: "attacks · findings · retest", d2: brightHost(s) },
+    ];
+
+    // Validation mode has no fix loop, so nothing is written back and the SCM
+    // node would sit unconnected. Omit it rather than imply a link.
+    if (!validation) {
+      nodes.push({ id: "scm", zone: "out", x: 610, y: 296, w: 190, h: 56, kind: "scm",
+        t: P.name.replace(" Actions", "").replace(" CI/CD", "").replace(" Pipelines", "")
+             .replace("CircleCI", "Your SCM").replace("Jenkins", "Your SCM"),
+        d: "branch · PR · status" });
+    }
+
+    // The LLM node sits inside the boundary when self-hosted — the visual point
+    // of the whole diagram for regulated environments.
+    nodes.push(selfHostedLlm
+      ? { id: "llm", zone: "in", x: 34, y: 284, w: 150, h: 52, kind: "llm",
+          t: providerLabel(s), d: "on your network" }
+      : { id: "llm", zone: "out", x: 610, y: 78, w: 190, h: 56, kind: "llm",
+          t: providerLabel(s), d: "inference API" });
+
+    if (validation) {
+      // Placed above the agent rather than in the lower-left slot, which the
+      // self-hosted LLM node occupies when provider=ollama.
+      nodes.push({ id: "sarif", zone: "in", x: 236, y: 40, w: 166, h: 52, kind: "sarif",
+        t: "SARIF findings", d: s.sarifTool === "codeql" && PLATFORMS[s.platform].codeql ? "from CodeQL" : "from your SAST" });
+    }
+
+    // Internal orchestration edges are unlabelled: the legend colour already
+    // says what they are, and labels there crowd the boundary box. Only edges
+    // whose detail is not obvious from position carry text.
+    //
+    // Note on the scan path: the agent spawns a local scan proxy (the Bright
+    // Repeater) which opens the outbound connection and drives test traffic at
+    // the target. The proxy is an implementation detail of the agent, so it is
+    // folded into the agent node here — what matters is that the outbound
+    // connection is initiated from inside your runner, and that test traffic
+    // reaches the app locally and never traverses the internet.
+    const edges = [
+      { from: "trigger", to: "ci", kind: "control" },
+      { from: "ci", to: "agent", kind: "control" },
+      { from: "repo", to: "agent", kind: "data" },
+      { from: "agent", to: "target", kind: "attack",
+        label: "Bright test traffic" },
+      { from: "agent", to: "cloud", kind: "tunnel", crosses: true, lane: 500,
+        label: "outbound only · findings" },
+      { from: "agent", to: "llm", kind: "llm", crosses: !selfHostedLlm, lane: 578,
+        label: selfHostedLlm ? "inference" : "code · analysis" },
+    ];
+
+    if (validation) edges.push({ from: "sarif", to: "agent", kind: "data", label: "to confirm" });
+    // No fix loop in validation mode, so nothing is written back.
+    if (!validation) {
+      edges.push({ from: "agent", to: "scm", kind: "write", crosses: true, lane: 452,
+        label: needsRepoToken(s) ? "REPO_ACCESS_TOKEN" : (s.platform === "github" ? "GITHUB_TOKEN" : "System.AccessToken") });
+    }
+
+    return { nodes, edges, selfHostedLlm, validation, harness };
+  }
+
+  /** Node glyphs, drawn inline. No third-party icon requests. */
+  const GLYPHS = {
+    trigger: '<path d="M6 1 1 8h4l-1 6 6-8H6l1-5Z"/>',
+    ci:      '<path d="M1 3.5A2.5 2.5 0 0 1 3.5 1h9A2.5 2.5 0 0 1 15 3.5v9A2.5 2.5 0 0 1 12.5 15h-9A2.5 2.5 0 0 1 1 12.5v-9Zm3 3 3 2.5-3 2.5M8.5 11.5h4"/>',
+    repo:    '<path d="M3 1.5h7.5L13 4v10.5H3V1.5Zm7 0V4h3M5.5 7h5M5.5 10h5"/>',
+    agent:   '<path d="M8 1v2M4.5 3.5h7A1.5 1.5 0 0 1 13 5v5a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 10V5a1.5 1.5 0 0 1 1.5-1.5ZM6 6.5v1.5M10 6.5v1.5M2 13.5h12"/>',
+    app:     '<path d="M2 5.5h12v8H2v-8Zm0 0L4 2h8l2 3.5M5.5 9h5"/>',
+    repeater:'<path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5ZM3.5 3a7 7 0 0 0 0 10M12.5 3a7 7 0 0 1 0 10"/>',
+    cloud:   '<path d="M4.5 12.5h7a3 3 0 0 0 .3-6A4 4 0 0 0 4 5.6 2.9 2.9 0 0 0 4.5 12.5Z"/>',
+    llm:     '<path d="M8 1.5 14 5v6l-6 3.5L2 11V5l6-3.5Zm0 0v13M2 5l6 3.5L14 5"/>',
+    scm:     '<path d="M4.5 2.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm0 4v7M11.5 9.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm0 0v-3a2 2 0 0 0-2-2h-3"/>',
+    sarif:   '<path d="M8 1.5 14.5 13H1.5L8 1.5Zm0 4v4m0 1.8v.2"/>',
+  };
+
+  /** Centre-right / centre-left anchor points for orthogonal routing. */
+  function anchors(n) {
+    return {
+      l: { x: n.x, y: n.y + n.h / 2 },
+      r: { x: n.x + n.w, y: n.y + n.h / 2 },
+      t: { x: n.x + n.w / 2, y: n.y },
+      b: { x: n.x + n.w / 2, y: n.y + n.h },
+      cx: n.x + n.w / 2,
+      cy: n.y + n.h / 2,
+    };
+  }
+
+  /**
+   * Orthogonal path between two nodes, plus the point at which to place the
+   * edge label. `lane` gives an edge its own vertical corridor in the gap
+   * between the runner boundary and the outside column, so crossing edges do
+   * not stack their elbows on the same x.
+   *
+   * The label sits on the final horizontal run, just before the destination,
+   * which keeps it clear of the source cluster where several edges share a y.
+   */
+  function edgeGeometry(a, b, lane, dy) {
+    const A = anchors(a), B = anchors(b);
+    // Shift the destination entry point so several edges into one node do not
+    // land on the same pixel (and neither do their labels).
+    if (dy) { B.l.y += dy; B.r.y += dy; }
+
+    // Same column: straight vertical, label beside the midpoint.
+    if (Math.abs(A.cx - B.cx) < 4) {
+      const down = B.cy > A.cy;
+      const from = down ? A.b : A.t, to = down ? B.t : B.b;
+      return {
+        d: `M${from.x} ${from.y} L${to.x} ${to.y}`,
+        lx: from.x + 8, ly: (from.y + to.y) / 2, anchor: "start",
+      };
+    }
+
+    const leftToRight = A.cx < B.cx;
+    const from = leftToRight ? A.r : A.l;
+    const to = leftToRight ? B.l : B.r;
+    const midX = lane != null ? lane : (from.x + to.x) / 2;
+    return {
+      d: `M${from.x} ${from.y} H${midX} V${to.y} H${to.x}`,
+      // Anchored against the destination edge: the label always sits in the
+      // clear run just before the node, never across it.
+      lx: leftToRight ? to.x - 10 : to.x + 10,
+      ly: to.y - 7,
+      anchor: leftToRight ? "end" : "start",
+    };
+  }
+
+  function diagramCaption(s) {
+    const m = diagramModel(s);
+    const bits = [];
+    bits.push("Your application and its source stay on the runner. The agent drives test traffic at the app locally — that traffic never leaves your network.");
+    bits.push("Every connection outward is initiated from inside your runner over WSS/443, so no inbound firewall port is opened and no address needs allowlisting.");
+    bits.push("Vulnerabilities are found, exploited and re-validated by Bright's DAST engine. "
+      + "The model's job is the engineering around it: understanding the stack, building and booting the app, "
+      + "discovering endpoints, and writing the fixes.");
+    bits.push(m.selfHostedLlm
+      ? `That inference runs on ${providerLabel(s)} inside your network, so no code or findings reach a third-party model.`
+      : `Code and findings are sent to ${providerLabel(s)} for that reasoning.`);
+    if (m.validation) bits.push("Validation mode confirms SARIF findings against the live app and writes nothing back.");
+    return bits.join(" ");
+  }
+
+  /** Renders the architecture diagram for `s` as a standalone inline <svg>. */
+  function generateDiagram(s) {
+    const { nodes, edges } = diagramModel(s);
+    const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+    const out = [];
+
+    out.push(`<svg class="arch" viewBox="0 0 ${DIAGRAM_W} ${DIAGRAM_H}" role="img" `
+      + `aria-labelledby="arch-t arch-d" preserveAspectRatio="xMidYMid meet">`);
+    out.push(`<title id="arch-t">Bright Agent architecture for ${esc(PLATFORMS[s.platform].name)}</title>`);
+    out.push(`<desc id="arch-d">${esc(diagramCaption(s))}</desc>`);
+
+    // Arrowheads, one per edge kind so colour follows the line.
+    out.push("<defs>");
+    ["control", "data", "api", "llm", "write", "tunnel", "attack"].forEach((k) => {
+      out.push(`<marker id="ah-${k}" class="ah ah-${k}" viewBox="0 0 8 8" refX="7" refY="4" `
+        + `markerWidth="7" markerHeight="7" orient="auto-start-reverse">`
+        + `<path d="M0 0.5 L7.5 4 L0 7.5 z"/></marker>`);
+    });
+    out.push("</defs>");
+
+    // Runner boundary.
+    out.push(`<g class="zone">`
+      + `<rect class="zone-box" x="16" y="16" width="410" height="340" rx="14"/>`
+      + `<text class="zone-lbl" x="30" y="${DIAGRAM_H - 34}">Your CI runner — your infrastructure</text>`
+      + `</g>`);
+    out.push(`<g class="zone out">`
+      + `<text class="zone-lbl" x="${DIAGRAM_W - 16}" y="${DIAGRAM_H - 34}" text-anchor="end">Outside your network</text>`
+      + `</g>`);
+
+    // Edges first so nodes paint over the line ends.
+    edges.forEach((e) => {
+      const a = byId[e.from], b = byId[e.to];
+      if (!a || !b) return;
+      const g = edgeGeometry(a, b, e.lane, e.dy);
+      const cls = `edge e-${e.kind}${e.crosses ? " crosses" : ""}`;
+      out.push(`<path class="${cls}" d="${g.d}" marker-end="url(#ah-${e.kind})"/>`);
+      if (e.label) {
+        out.push(`<text class="edge-lbl e-${e.kind}" x="${g.lx.toFixed(0)}" y="${g.ly.toFixed(0)}" `
+          + `text-anchor="${g.anchor}">${esc(e.label)}</text>`);
+      }
+    });
+
+    // Nodes.
+    nodes.forEach((n) => {
+      const g = GLYPHS[n.kind] || GLYPHS.agent;
+      const shift = n.d2 ? 7 : 0;
+      out.push(`<g class="node n-${n.kind} z-${n.zone}" transform="translate(${n.x} ${n.y})">`
+        + `<rect class="node-box" width="${n.w}" height="${n.h}" rx="10"/>`
+        + `<g class="glyph" transform="translate(12 ${(n.h - 16) / 2}) scale(1)">${g}</g>`
+        + `<text class="node-t" x="38" y="${n.h / 2 - 3 - shift}">${esc(n.t)}</text>`
+        + `<text class="node-d" x="38" y="${n.h / 2 + 12 - shift}">${esc(n.d)}</text>`
+        + (n.d2 ? `<text class="node-d" x="38" y="${n.h / 2 + 25 - shift}">${esc(n.d2)}</text>` : "")
+        + `</g>`);
+    });
+
+    out.push("</svg>");
+    return out.join("");
+  }
+
   function highlight(src, lang) {
     const commentChar = lang === "groovy" ? "//" : "#";
     return src.split("\n").map((line) => {
@@ -946,6 +1211,8 @@
     secretRows, summaryLine, repoAccessDoc, platformExtraDoc, steeringDoc, validationDoc, generateDoc,
     // credential validation
     brightHost, inferenceCheckPlan, modelInList, interpretModelsResponse, brightCheckUrl, brightCurl,
+    // diagram
+    diagramModel, generateDiagram, diagramCaption, providerLabel, edgeGeometry, DIAGRAM_W, DIAGRAM_H,
     // highlight
     highlight, keyHighlight,
   };

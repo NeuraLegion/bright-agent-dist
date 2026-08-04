@@ -561,3 +561,180 @@ test("summaryLine omits scope wording in validation mode", () => {
   const line = G.summaryLine(st({ runMode: "validation", triggers: only("manual") }));
   assert.ok(!/scope/.test(line));
 });
+
+// ---------------------------------------------------------------------------
+// Architecture diagram
+//
+// The directions here are the point of these tests. A diagram that is subtly
+// wrong is worse than none, because readers trust it over the YAML. The two
+// facts that must never regress: test traffic is driven locally by the agent
+// (the Bright cloud never reaches the app), and every outbound connection is
+// initiated from inside the runner.
+// ---------------------------------------------------------------------------
+
+const edgeBetween = (m, from, to) => m.edges.find((e) => e.from === from && e.to === to);
+
+test("diagram: the cloud never connects to the target app", () => {
+  for (const provider of Object.keys(G.PROVIDERS)) {
+    for (const runMode of Object.keys(G.RUN_MODES)) {
+      const m = G.diagramModel({ ...G.defaultState(), provider, runMode });
+      assert.equal(edgeBetween(m, "cloud", "target"), undefined,
+        `cloud must not reach the target (${provider}/${runMode})`);
+      assert.equal(m.edges.some((e) => e.to === "target" && e.from !== "agent"), false,
+        "only the agent drives traffic at the target");
+    }
+  }
+});
+
+test("diagram: test traffic is a local edge from the agent to the app", () => {
+  const m = G.diagramModel(G.defaultState());
+  const e = edgeBetween(m, "agent", "target");
+  assert.ok(e, "agent -> target edge exists");
+  assert.equal(e.kind, "attack");
+  assert.ok(!e.crosses, "test traffic must never cross the runner boundary");
+  assert.match(e.label, /Bright test traffic/,
+    "the traffic hitting the app is Bright's testing, not the agent's own");
+});
+
+test("diagram: every outbound edge starts inside the runner", () => {
+  const m = G.diagramModel(G.defaultState());
+  const inside = new Set(m.nodes.filter((n) => n.zone === "in").map((n) => n.id));
+  m.edges.filter((e) => e.crosses).forEach((e) => {
+    assert.ok(inside.has(e.from), `${e.from} -> ${e.to} must be initiated from inside`);
+  });
+});
+
+test("diagram: the outbound edge to Bright is labelled outbound-only", () => {
+  const e = edgeBetween(G.diagramModel(G.defaultState()), "agent", "cloud");
+  assert.equal(e.kind, "tunnel");
+  assert.ok(e.crosses);
+  assert.match(e.label, /outbound only/);
+});
+
+test("diagram: a self-hosted model keeps inference inside the boundary", () => {
+  const remote = G.diagramModel({ ...G.defaultState(), provider: "openai" });
+  assert.equal(remote.nodes.find((n) => n.id === "llm").zone, "out");
+  assert.equal(edgeBetween(remote, "agent", "llm").crosses, true);
+
+  const local = G.diagramModel({ ...G.defaultState(), provider: "ollama" });
+  assert.equal(local.nodes.find((n) => n.id === "llm").zone, "in");
+  assert.equal(edgeBetween(local, "agent", "llm").crosses, false);
+  assert.match(G.diagramCaption({ ...G.defaultState(), provider: "ollama" }),
+    /no code or findings reach a third-party model/);
+});
+
+test("diagram: validation mode writes nothing back and has no floating nodes", () => {
+  const m = G.diagramModel({ ...G.defaultState(), runMode: "validation" });
+  assert.equal(m.edges.some((e) => e.kind === "write"), false, "no write-back in validation mode");
+  assert.equal(m.nodes.some((n) => n.id === "scm"), false, "the SCM node is omitted, not left unconnected");
+  assert.ok(m.nodes.some((n) => n.id === "sarif"), "SARIF input is shown");
+  const touched = new Set(m.edges.flatMap((e) => [e.from, e.to]));
+  m.nodes.forEach((n) => assert.ok(touched.has(n.id), `${n.id} must be connected`));
+});
+
+test("diagram: the write edge names the credential actually used", () => {
+  assert.match(edgeBetween(G.diagramModel(G.defaultState()), "agent", "scm").label, /GITHUB_TOKEN/);
+  assert.match(edgeBetween(G.diagramModel({ ...G.defaultState(), tokenMode: "pat" }), "agent", "scm").label,
+    /REPO_ACCESS_TOKEN/);
+  assert.match(edgeBetween(G.diagramModel({ ...G.defaultState(), platform: "gitlab" }), "agent", "scm").label,
+    /REPO_ACCESS_TOKEN/);
+});
+
+test("diagram: the harness replaces the booted app", () => {
+  const h = G.diagramModel({ ...G.defaultState(), runMode: "function" });
+  const target = h.nodes.find((n) => n.id === "target");
+  assert.match(target.t, /harness/i);
+  assert.match(target.d, /wrapped functions/);
+  assert.equal(edgeBetween(h, "agent", "target").kind, "attack",
+    "Bright still drives the testing against the harness");
+});
+
+test("diagram: no node overlaps or dangling edges in any combination", () => {
+  const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    for (const runMode of Object.keys(G.RUN_MODES)) {
+      for (const provider of Object.keys(G.PROVIDERS)) {
+        const m = G.diagramModel({ ...G.defaultState(), platform, runMode, provider });
+        const ids = new Set(m.nodes.map((n) => n.id));
+        m.edges.forEach((e) => {
+          assert.ok(ids.has(e.from) && ids.has(e.to), `dangling ${e.from}->${e.to}`);
+        });
+        for (let i = 0; i < m.nodes.length; i++) {
+          for (let j = i + 1; j < m.nodes.length; j++) {
+            assert.equal(hit(m.nodes[i], m.nodes[j]), false,
+              `${m.nodes[i].id} overlaps ${m.nodes[j].id} (${platform}/${runMode}/${provider})`);
+          }
+        }
+      }
+    }
+  }
+});
+
+test("diagram: renders standalone SVG with no external references", () => {
+  const svg = G.generateDiagram(G.defaultState());
+  assert.ok(svg.startsWith("<svg") && svg.endsWith("</svg>"));
+  assert.equal(/<image|xlink:href|https?:\/\//.test(svg), false, "no external assets or URLs");
+  assert.match(svg, /<title id="arch-t">/, "has an accessible title");
+  assert.match(svg, /<desc id="arch-d">/, "has an accessible description");
+  assert.match(svg, /role="img"/);
+});
+
+test("diagram: labels are anchored so they cannot run into the destination node", () => {
+  const s = G.defaultState();
+  const m = G.diagramModel(s);
+  const byId = Object.fromEntries(m.nodes.map((n) => [n.id, n]));
+  m.edges.filter((e) => e.label && e.crosses).forEach((e) => {
+    const g = G.edgeGeometry(byId[e.from], byId[e.to], e.lane, e.dy);
+    assert.equal(g.anchor, "end", `${e.from}->${e.to} label must end before the node`);
+    assert.ok(g.lx < byId[e.to].x, "label anchor sits left of the destination box");
+  });
+});
+
+test("diagram: caption states the local-traffic and outbound-only guarantees", () => {
+  const cap = G.diagramCaption(G.defaultState());
+  assert.match(cap, /never leaves your network/);
+  assert.match(cap, /no inbound firewall port/);
+});
+
+test("diagram: attribution — Bright finds, the model engineers", () => {
+  const m = G.diagramModel(G.defaultState());
+  const agent = m.nodes.find((n) => n.id === "agent");
+  const cloud = m.nodes.find((n) => n.id === "cloud");
+
+  // The agent must not claim the scanning; that is the engine's job.
+  assert.equal(/scan|attack|find/i.test(agent.d), false,
+    `agent subtitle must not claim scanning: ${agent.d}`);
+  assert.match(agent.d, /build|discover|fix/);
+
+  // The engine must be named as the source of attacks and findings.
+  assert.match(cloud.t, /DAST/);
+  assert.match(cloud.d, /attacks/);
+  assert.match(cloud.d, /findings/);
+
+  // The model receives findings, it does not produce them.
+  const llm = edgeBetween(m, "agent", "llm");
+  assert.equal(/findings\b/.test(llm.label) && !/code/.test(llm.label), false);
+
+  const cap = G.diagramCaption(G.defaultState());
+  assert.match(cap, /found, exploited and re-validated by Bright/);
+  assert.match(cap, /model's job is the engineering/);
+});
+
+test("diagram: the engine node shows the cluster the workflow actually targets", () => {
+  const host = (s) => G.diagramModel(s).nodes.find((n) => n.id === "cloud").d2;
+
+  assert.equal(host(G.defaultState()), "app.brightsec.com");
+  assert.equal(host({ ...G.defaultState(), brightHostname: "eu.brightsec.com" }), "eu.brightsec.com");
+  assert.equal(host({ ...G.defaultState(), brightHostname: "  dedicated.brightsec.com  " }),
+    "dedicated.brightsec.com", "whitespace is trimmed, as brightHost does");
+
+  // The label is a boundary claim, so it must agree with the workflow file.
+  const s = { ...G.defaultState(), brightHostname: "eu.brightsec.com" };
+  assert.match(G.generateYaml(s), /BRIGHT_HOSTNAME/);
+  assert.match(G.generateDiagram(s), /eu\.brightsec\.com/);
+  assert.equal(/app\.brightsec\.com/.test(G.generateDiagram(s)), false,
+    "the default host must not appear once a cluster is set");
+
+  // No self-hosted Bright option exists, so the engine is always outside.
+  assert.equal(G.diagramModel(s).nodes.find((n) => n.id === "cloud").zone, "out");
+});

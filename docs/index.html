@@ -17,6 +17,8 @@
     --muted:   #62677e;
     --line:    #e9eaf2;
     --bg:      #f3f4f9;
+      --violet:  #7a5cff;
+      --edge:    #9aa0bd;
     --card:    #ffffff;
     --magenta-tint: #fff6fb;
     --orange-tint:  #fff6ee;
@@ -217,6 +219,76 @@
   .m-foot { padding: 12px 20px 18px; font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--line); }
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(0,0,0,.15); border-top-color: var(--magenta); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 7px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---- architecture diagram ------------------------------------------------ */
+  .arch-card { margin-top: 20px; }
+  .arch-head { display: flex; align-items: baseline; gap: 10px; padding: 14px 18px 0; flex-wrap: wrap; }
+  .arch-head h2 { font-size: 14px; margin: 0; letter-spacing: -0.01em; }
+  .arch-wrap { padding: 8px 14px 0; }
+  svg.arch { display: block; width: 100%; height: auto; }
+  svg.arch text { font-family: inherit; }
+
+  .arch .zone-box { fill: rgba(122, 92, 255, 0.04); stroke: #c9cde4; stroke-width: 1.5; stroke-dasharray: 7 5; }
+  .arch .zone-lbl { font-size: 10.5px; font-weight: 700; fill: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .arch .node-box { fill: #fff; stroke: var(--line); stroke-width: 1.5; }
+  .arch .z-out .node-box { fill: #fbfbfe; stroke: #d9dcec; }
+  .arch .glyph { fill: none; stroke: var(--slate); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .arch .node-t { font-size: 12.5px; font-weight: 650; fill: var(--navy); }
+  .arch .node-d { font-size: 10.5px; fill: var(--muted); }
+  .arch .n-cloud .node-box { stroke: var(--magenta); }
+  .arch .n-cloud .glyph { stroke: var(--magenta); }
+  .arch .n-cloud .node-t { fill: var(--magenta); }
+  .arch .n-llm .glyph { stroke: var(--violet); }
+  .arch .n-repeater .glyph { stroke: var(--magenta); }
+  .arch .n-agent .node-box { stroke: var(--orange); stroke-width: 2; }
+  .arch .n-agent .glyph { stroke: var(--orange); }
+  .arch .n-scm .glyph { stroke: var(--gold); }
+  .arch .n-sarif .glyph { stroke: var(--gold); }
+
+  /* Edge colours are scoped to path: the label <text> carries the same e-* class,
+     and an unscoped `stroke` there would outline the glyphs in the edge colour. */
+  .arch path.edge { fill: none; stroke-width: 1.6; stroke-linecap: round; }
+  .arch path.e-control, .arch path.e-data { stroke: var(--edge); }
+  .arch path.e-api { stroke: var(--magenta); }
+  .arch path.e-tunnel { stroke: var(--magenta); stroke-width: 2.2; }
+  .arch path.e-attack { stroke: var(--orange); stroke-width: 2; }
+  .arch path.e-llm { stroke: var(--violet); }
+  .arch path.e-write { stroke: var(--gold); stroke-width: 2; }
+
+  /* Labels are never stroked in the edge colour; a thin white halo keeps them
+     legible where a line passes behind. Tints are darker than the lines, since
+     10.5px text needs more contrast than a 2px rule. */
+  .arch text.edge-lbl { font-size: 10.5px; font-weight: 600; stroke: #fff;
+    stroke-width: 3px; stroke-linejoin: round; paint-order: stroke fill; }
+  .arch text.e-control, .arch text.e-data { fill: #5c6178; }
+  .arch text.e-api, .arch text.e-tunnel { fill: #bc2f9c; }
+  .arch text.e-attack { fill: #c05a00; }
+  .arch text.e-llm { fill: #5b3fd6; }
+  .arch text.e-write { fill: #8a7413; }
+
+  .arch marker path { stroke: none; }
+  .arch .ah-control path, .arch .ah-data path { fill: var(--edge); }
+  .arch .ah-api path, .arch .ah-tunnel path { fill: var(--magenta); }
+  .arch .ah-attack path { fill: var(--orange); }
+  .arch .ah-llm path { fill: var(--violet); }
+  .arch .ah-write path { fill: var(--gold); }
+
+  @keyframes archflow { to { stroke-dashoffset: -100; } }
+  .arch path.e-attack { stroke-dasharray: 6 4; animation: archflow 3.4s linear infinite; }
+  .arch path.e-tunnel { stroke-dasharray: 3 6; animation: archflow 4.6s linear infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .arch path.e-attack, .arch path.e-tunnel { animation: none; }
+  }
+
+  .arch-cap { margin: 6px 18px 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
+  .arch-key { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 12px 18px 16px; }
+  .arch-key .k { font-size: 10.5px; font-weight: 650; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .arch-key .k::before { content: ""; width: 14px; height: 3px; border-radius: 2px; background: var(--edge); }
+  .arch-key .k-api::before { background: var(--magenta); }
+  .arch-key .k-attack::before { background: var(--orange); }
+  .arch-key .k-llm::before { background: var(--violet); }
+  .arch-key .k-write::before { background: var(--gold); }
 </style>
 </head>
 <body>
@@ -250,6 +322,23 @@
         </div>
         <div id="view-doc" style="display:none">
           <div class="doc-body" id="out-doc"></div>
+        </div>
+      </div>
+
+      <div class="card arch-card">
+        <div class="arch-head">
+          <h2>What this configuration does</h2>
+          <span class="hint" id="arch-sum"></span>
+        </div>
+        <div class="arch-wrap" id="arch-svg"></div>
+        <p class="arch-cap" id="arch-cap"></p>
+        <div class="arch-key">
+          <span class="k k-control">orchestration</span>
+          <span class="k k-data">your source</span>
+          <span class="k k-llm">AI: build · discover · fix</span>
+          <span class="k k-attack">Bright test traffic</span>
+          <span class="k k-api">Bright scan · findings</span>
+          <span class="k k-write">fix write-back</span>
         </div>
       </div>
     </section>
@@ -497,6 +586,9 @@ function refresh(rerenderForm) {
   currentYaml = G.generateYaml(S);
   document.getElementById("out-code").innerHTML = G.highlight(currentYaml, G.codeLang(S));
   document.getElementById("out-doc").innerHTML = G.generateDoc(S);
+  document.getElementById("arch-svg").innerHTML = G.generateDiagram(S);
+  document.getElementById("arch-cap").textContent = G.diagramCaption(S);
+  document.getElementById("arch-sum").innerHTML = G.summaryLine(S);
 }
 function downloadFile() {
   const blob = new Blob([currentYaml + "\n"], { type: "text/plain" });
