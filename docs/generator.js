@@ -282,6 +282,12 @@
       L.push(`          BRIGHT_STEERING_PR_NUMBER: \${{ github.event_name == 'issue_comment' && github.event.issue.number || '' }}`);
       L.push(`          BRIGHT_STEERING_PR_HEAD: \${{ steps.steer.outputs.head_ref }}`);
       L.push(`          BRIGHT_STEERING_PR_BASE: \${{ steps.steer.outputs.base_ref }}`);
+      // On an issue_comment (/bright-agent) trigger GITHUB_BASE_REF is empty, so
+      // the agent cannot auto-derive the PR base and would fall back to a full
+      // scan. Pass the resolved PR base explicitly as DIFF_BASE (origin/<base>)
+      // so the steered run is diff-scoped to the PR's changes. Empty on every
+      // other trigger, so PR/push/manual/schedule runs are unaffected.
+      L.push(`          DIFF_BASE: \${{ steps.steer.outputs.base_ref && format('origin/{0}', steps.steer.outputs.base_ref) || '' }}`);
     }
     L.push(`        run: "\${{ runner.temp }}/\${{ env.ASSET }}"`);
     if (s.debug) {

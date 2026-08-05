@@ -202,11 +202,19 @@ test("github: steering adds resolve step, issue_comment trigger, and steering en
   assert.match(y, /BRIGHT_STEERING_COMMENT:/);
   assert.match(y, /BRIGHT_STEERING_PR_BASE:/);
 });
-test("github: no steering → no steering plumbing", () => {
+test("github: steering sets DIFF_BASE from the resolved PR base (diff-scoped steered run)", () => {
+  const y = G.generateGitHub(st({ triggers: only("pr", "steering") }));
+  assert.match(
+    y,
+    /DIFF_BASE: \$\{\{ steps\.steer\.outputs\.base_ref && format\('origin\/\{0\}', steps\.steer\.outputs\.base_ref\) \|\| '' \}\}/,
+  );
+});
+test("github: no steering → no steering plumbing and no DIFF_BASE", () => {
   const y = G.generateGitHub(st({ triggers: only("schedule", "manual") }));
   assert.ok(!/issue_comment/.test(y));
   assert.ok(!/BRIGHT_STEERING_/.test(y));
   assert.ok(!/Resolve steering PR/.test(y));
+  assert.ok(!/DIFF_BASE/.test(y));
 });
 test("github: checkout ref is a wrapped expression when pr/steering present", () => {
   const y = G.generateGitHub(st({ triggers: only("pr", "steering") }));
