@@ -141,6 +141,104 @@ Store these in your CI's secret manager — never commit them.
 Bring your own inference provider — anything exposing an OpenAI-compatible API.
 If you use OpenAI directly, you may set `OPENAI_API_KEY` instead of `INFERENCE_TOKEN`.
 
+### AWS Bedrock with IAM (no static API key)
+
+If your inference provider is **AWS Bedrock**, you can skip `INFERENCE_TOKEN`
+entirely and use IAM role-based authentication. The agent generates a short-term
+Bearer token from the runner's ambient AWS credentials at the start of each run.
+
+**What you need in the environment:**
+
+| Variable | Required | Purpose |
+|---|:---:|---|
+| `INFERENCE_URL` | **Yes** | `https://bedrock-mantle.<region>.api.aws/v1` — the region determines which Bedrock region is used |
+| `AI_MODEL` | **Yes** | Bedrock model ID, e.g. `anthropic.claude-sonnet-4-20250514` |
+| AWS credentials | **Yes** | Any standard AWS credential method (see below) |
+| `INFERENCE_TOKEN` | **No** | Leave unset — its absence triggers the IAM path |
+
+**How AWS credentials reach the runner:**
+
+| Method | Setup | Typical use |
+|---|---|---|
+| OIDC federation | `aws-actions/configure-aws-credentials` (GitHub) or equivalent | **Recommended for CI** — no long-lived secrets |
+| Static access keys | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_SESSION_TOKEN`) | Quick setup, requires rotation |
+| Named profile | `AWS_PROFILE` pointing to `~/.aws/credentials` | Local dev / self-hosted runners |
+| Instance profile | Automatic on EC2/ECS/Lambda | Self-hosted runners on AWS |
+| Web identity (IRSA) | `AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE` | Kubernetes (EKS), CI with OIDC |
+
+**IAM permissions required:**
+
+The principal needs `bedrock:InvokeModel`. The simplest option is the
+`AmazonBedrockLimitedAccess` managed policy. For least-privilege:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+    "Resource": "arn:aws:bedrock:*::foundation-model/*"
+  }]
+}
+```
+
+**GitHub Actions example (OIDC):**
+
+```yaml
+permissions:
+  id-token: write    # Required for OIDC federation
+  contents: write
+  pull-requests: write
+  statuses: write
+
+steps:
+  - uses: actions/checkout@v4
+    with:
+      ref: ${{ github.head_ref || github.ref }}
+      fetch-depth: 0
+
+  - uses: aws-actions/configure-aws-credentials@v4
+    with:
+      role-to-assume: arn:aws:iam::123456789012:role/BrightAgentRole
+      aws-region: us-east-1
+
+  - name: Download Bright Agent
+    run: |
+      curl -sL "https://github.com/NeuraLegion/bright-agent-dist/releases/latest/download/bright-agent-linux-x64" -o "$RUNNER_TEMP/bright-agent"
+      chmod +x "$RUNNER_TEMP/bright-agent"
+
+  - name: Run Bright Agent
+    env:
+      BRIGHT_TOKEN: ${{ secrets.BRIGHT_TOKEN }}
+      REPO_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      INFERENCE_URL: "https://bedrock-mantle.us-east-1.api.aws/v1"
+      AI_MODEL: "anthropic.claude-sonnet-4-20250514"
+      # No INFERENCE_TOKEN — uses the IAM role from above
+    run: "$RUNNER_TEMP/bright-agent"
+```
+
+**Preflight validation:**
+
+Run with `BRIGHT_PREFLIGHT_ONLY=1` to validate credentials without scanning:
+
+```bash
+BRIGHT_PREFLIGHT_ONLY=1 INFERENCE_URL="https://bedrock-mantle.us-east-1.api.aws/v1" \
+AI_MODEL="anthropic.claude-sonnet-4-20250514" BRIGHT_TOKEN="..." ./bright-agent
+```
+
+**Troubleshooting:**
+
+| Error | Fix |
+|---|---|
+| "No AWS credentials found" | Add `aws-actions/configure-aws-credentials` or set `AWS_ACCESS_KEY_ID` |
+| "Cannot determine AWS region from INFERENCE_URL" | Use format `https://bedrock-mantle.<region>.api.aws/v1` |
+| "AWS credential resolution failed" | Credentials expired — refresh or check `AWS_SESSION_TOKEN` |
+| "AWS permissions insufficient" | Attach `AmazonBedrockLimitedAccess` policy to the IAM role |
+
+> If you already have a Bedrock API key (Console → Bedrock → API keys), pass it
+> as `INFERENCE_TOKEN` directly. The IAM path only activates when no token is set.
+
+
 > **GitHub Actions:** you can skip the `REPO_ACCESS_TOKEN` PAT and use the
 > built-in `GITHUB_TOKEN` — set `REPO_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}`
 > and grant `contents: write` + `pull-requests: write` (see the example).

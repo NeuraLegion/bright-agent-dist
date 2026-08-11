@@ -63,7 +63,7 @@ INFERENCE_TOKEN="your-inference-token" \
 | `LOCAL_REPO_PATH`   | No       | Path to the checked-out repo to scan. Defaults to the current directory. Bright Agent runs against this working copy — it does not clone |
 | `REPO_ACCESS_TOKEN` | **Yes**  | Token that can push branches and open PRs                                                    |
 | `BRIGHT_TOKEN`      | **Yes**  | Bright API token from https://app.brightsec.com                                              |
-| `INFERENCE_TOKEN`   | **Yes**  | API token for your inference endpoint                                                        |
+| `INFERENCE_TOKEN`   | Varies   | API token for your inference endpoint. **Not needed for AWS Bedrock with IAM** — the agent generates a token from ambient AWS credentials when this is unset and the URL points to Bedrock. See [`examples/ci/README.md`](./examples/ci/README.md#aws-bedrock-with-iam-no-static-api-key) |
 | `INFERENCE_URL`     | No       | Your inference endpoint. Default: `https://api.openai.com/v1` (OpenAI). Also works with Anthropic (`https://api.anthropic.com`), AWS Bedrock (`https://bedrock-mantle.<region>.api.aws/v1`), Azure OpenAI / Foundry (`https://<resource>.openai.azure.com/openai/v1`), Ollama, or any OpenAI-compatible gateway |
 | `REPOSITORY_URL`    | No       | Repo identity for the PR. Derived from the checkout's `origin` remote if omitted             |
 | `AI_MODEL`          | No       | Model name or comma-separated escalation chain. Default: `gpt-5.4-mini`                      |
