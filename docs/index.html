@@ -151,8 +151,12 @@
     transition: .12s;
   }
   .btn:hover { border-color: #d5d7e6; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
   .btn.primary { background: var(--magenta); border-color: var(--magenta); color: #fff; }
-  .btn.primary:hover { background: #cf49b2; }
+  .btn.primary:hover:not(:disabled) { background: #cf49b2; }
+  .config-errors { display: none; margin: 12px 18px 0; padding: 10px 12px; border-left: 3px solid #d64545; border-radius: 0 9px 9px 0; background: #fdf1f1; color: #9a2c2c; font-size: 12.5px; }
+  .config-errors.show { display: block; }
+  .config-errors ul { margin: 4px 0 0; padding-left: 18px; }
   pre.code {
     margin: 0; padding: 16px 18px; overflow: auto; max-height: 460px;
     font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.55;
@@ -318,6 +322,7 @@
             <button class="btn" id="btn-copy" type="button">Copy</button>
             <button class="btn primary" id="btn-download" type="button">Download</button>
           </div>
+          <div class="config-errors" id="config-errors" role="alert"></div>
           <pre class="code" id="out-code">…</pre>
         </div>
         <div id="view-doc" style="display:none">
@@ -358,9 +363,9 @@
     </div>
     <div class="m-body">
       <div class="cred">
-        <h3>Inference token</h3>
+        <h3 id="cred-inf-title">Inference token</h3>
         <div class="meta" id="cred-inf-meta"></div>
-        <div class="row">
+        <div class="row" id="cred-inf-row">
           <input id="cred-inf-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="INFERENCE_TOKEN" />
           <button class="reveal" data-for="cred-inf-token" type="button">Show</button>
           <button class="btn primary" id="cred-inf-check" type="button">Check</button>
@@ -374,7 +379,7 @@
         <button class="btn" id="cred-bright-copy" type="button">Copy command</button>
       </div>
     </div>
-    <div class="m-foot">
+    <div class="m-foot" id="cred-foot">
       The inference token stays in this browser tab, is sent only to the endpoint you're checking, and is cleared when you close this dialog. Nothing is stored, logged, or proxied. The Bright command runs in your own terminal.
     </div>
   </div>
@@ -442,6 +447,10 @@ function optCheck(meta, checked, disabled, badge) {
 function textField(label, sub, value, onInput, ph) {
   const inp = el("input", { type: "text", value: value || "", ...(ph ? { placeholder: ph } : {}) });
   inp.addEventListener("input", (e) => { onInput(e.target.value); refresh(false); });
+  return el("div", { class: "field" }, [el("label", { class: "lbl" }, label), sub ? el("div", { class: "sub" }, sub) : null, inp]);
+}
+function readOnlyField(label, sub, value) {
+  const inp = el("input", { id: "bedrock-endpoint", type: "text", value: value || "", readonly: "readonly", "aria-readonly": "true" });
   return el("div", { class: "field" }, [el("label", { class: "lbl" }, label), sub ? el("div", { class: "sub" }, sub) : null, inp]);
 }
 function selectField(label, sub, options, value, onChange) {
@@ -532,11 +541,57 @@ function renderForm() {
   }
 
   // 5. Inference
-  const provSel = selectField("Provider", "STAR works with any OpenAI-compatible API.",
-    Object.entries(PROVIDERS).map(([id, p]) => [id, p.t]), S.provider, (v) => { S.provider = v; S.inferenceUrl = PROVIDERS[v].url; });
-  const urlField = textField("INFERENCE_URL", "Written directly into the generated workflow file (non-secret).", S.inferenceUrl, (v) => { S.inferenceUrl = v; });
-  const modelField = textField("AI_MODEL (optional)", "Single model or a comma-separated escalation chain. Blank = provider default, written into the file.", S.aiModel, (v) => { S.aiModel = v; }, PROVIDERS[S.provider].model || "provider default");
-  const provExtra = [provSel, urlField, modelField];
+  const provSel = selectField("Provider", "Choose the inference provider STAR will use.",
+    Object.entries(PROVIDERS).map(([id, p]) => [id, p.t]), S.provider, (v) => {
+      S.provider = v;
+      S.inferenceAuth = "token";
+      S.inferenceUrl = PROVIDERS[v].url;
+      S.aiModel = "";
+    });
+  const provExtra = [provSel];
+  if (S.provider === "bedrock") {
+    const authOpts = el("div", { class: "opts", style: "margin-top:12px" });
+    const tokenAuth = optRadio("inference-auth", "token", {
+      t: "Bedrock API key",
+      d: "Use the INFERENCE_TOKEN secret. No AWS role or OIDC setup is generated.",
+    }, S.inferenceAuth !== "aws-oidc", false);
+    tokenAuth.querySelector("input").addEventListener("change", () => { S.inferenceAuth = "token"; refresh(true); });
+    const oidcDisabled = S.platform !== "github";
+    const oidcAuth = optRadio("inference-auth", "aws-oidc", {
+      t: "AWS IAM role via GitHub OIDC",
+      d: "Generate id-token permission and assume an AWS role with no static inference secret.",
+    }, S.inferenceAuth === "aws-oidc", oidcDisabled, "GitHub Actions only");
+    oidcAuth.querySelector("input").addEventListener("change", () => {
+      S.inferenceAuth = "aws-oidc";
+      S.inferenceUrl = G.bedrockInferenceUrl(S.awsRegion);
+      refresh(true);
+    });
+    authOpts.appendChild(tokenAuth); authOpts.appendChild(oidcAuth);
+    provExtra.push(el("div", { class: "field" }, [el("label", { class: "lbl" }, "Authentication"), authOpts]));
+  }
+  if (G.usesBedrockOidc(S)) {
+    provExtra.push(textField("AWS role ARN", "Role trusted for GitHub Actions OIDC. Written into the workflow; not a secret.", S.awsRoleArn, (v) => { S.awsRoleArn = v; }, "arn:aws:iam::123456789012:role/BrightAgentRole"));
+    provExtra.push(textField("AWS region", "Used for both role credentials and the Bedrock endpoint.", S.awsRegion, (v) => {
+      S.awsRegion = v;
+      S.inferenceUrl = G.bedrockInferenceUrl(v);
+      const endpoint = document.getElementById("bedrock-endpoint");
+      if (endpoint) endpoint.value = G.bedrockInferenceUrl(v);
+    }, "us-east-1"));
+    provExtra.push(readOnlyField("INFERENCE_URL", "Derived from AWS region and restricted to the AWS-owned Bedrock Mantle hostname.", G.bedrockInferenceUrl(S.awsRegion)));
+    provExtra.push(textField("AI_MODEL", "Required openai.* Bedrock model or inference-profile ID for the OpenAI Chat Completions route. Anthropic/Claude IDs require Bedrock API-key mode.", S.aiModel, (v) => { S.aiModel = v; }, G.BEDROCK_OIDC_MODEL_EXAMPLE));
+  } else {
+    provExtra.push(textField("INFERENCE_URL", "Written directly into the generated workflow file (non-secret).", S.inferenceUrl, (v) => { S.inferenceUrl = v; }));
+    const bedrockTokenMode = S.provider === "bedrock";
+    provExtra.push(textField(
+      bedrockTokenMode ? "AI_MODEL" : "AI_MODEL (optional)",
+      bedrockTokenMode
+        ? "Required Bedrock model or inference-profile ID. Use one API family per escalation chain; regional Anthropic profiles are supported."
+        : "Single model or a comma-separated escalation chain. Blank = provider default, written into the file.",
+      S.aiModel,
+      (v) => { S.aiModel = v; },
+      bedrockTokenMode ? "anthropic.claude-… or openai.gpt-oss-120b-1:0" : PROVIDERS[S.provider].model || "provider default",
+    ));
+  }
   root.appendChild(card("Inference", "your LLM endpoint", provExtra));
 
   // 6. Repo access
@@ -575,6 +630,7 @@ function onPlatformChange() {
     else S.triggers[P.triggers[0]] = true;
   }
   S.tokenMode = P.builtinToken ? (S.tokenMode === "pat" ? "pat" : "builtin") : "pat";
+  if (S.platform !== "github" && S.inferenceAuth === "aws-oidc") S.inferenceAuth = "token";
   refresh(true);
 }
 
@@ -589,8 +645,17 @@ function refresh(rerenderForm) {
   document.getElementById("arch-svg").innerHTML = G.generateDiagram(S);
   document.getElementById("arch-cap").textContent = G.diagramCaption(S);
   document.getElementById("arch-sum").innerHTML = G.summaryLine(S);
+  const errors = G.configurationErrors(S);
+  const errorBox = document.getElementById("config-errors");
+  errorBox.className = "config-errors" + (errors.length ? " show" : "");
+  errorBox.innerHTML = errors.length ? `<b>Complete the Bedrock configuration before copying or downloading:</b><ul>${errors.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  document.getElementById("btn-copy").disabled = errors.length > 0;
+  document.getElementById("btn-download").disabled = errors.length > 0;
+  document.getElementById("btn-validate").textContent = G.usesBedrockOidc(S) ? "Validate setup" : "Validate tokens";
 }
 function downloadFile() {
+  const errors = G.configurationErrors(S);
+  if (errors.length) { showToast("Complete the Bedrock fields first"); return; }
   const blob = new Blob([currentYaml + "\n"], { type: "text/plain" });
   const url = URL.createObjectURL(blob);
   const a = el("a", { href: url, download: G.fileName(S) });
@@ -599,6 +664,8 @@ function downloadFile() {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 function copyYaml() {
+  const errors = G.configurationErrors(S);
+  if (errors.length) { showToast("Complete the Bedrock fields first"); return; }
   navigator.clipboard.writeText(currentYaml).then(() => showToast("Copied to clipboard")).catch(() => {
     const ta = el("textarea", {}); ta.value = currentYaml; document.body.appendChild(ta); ta.select();
     try { document.execCommand("copy"); showToast("Copied"); } catch (e) {} ta.remove();
@@ -632,13 +699,28 @@ function credStatus(id, level, html) {
 function credBusy(id, label) { credStatus(id, "info", `<span class="spin"></span>${label}`); }
 function openCred() {
   const plan = G.inferenceCheckPlan(S, "");
-  document.getElementById("cred-inf-meta").innerHTML =
-    `Read-only check: <code>GET ${esc(plan.url)}</code> (no tokens spent). Confirms auth and that model <code>${esc(plan.model || "provider default")}</code> is available.`;
+  const oidc = plan.kind === "aws-oidc";
+  document.getElementById("cred-inf-title").textContent = oidc ? "AWS Bedrock IAM/OIDC" : "Inference token";
+  document.getElementById("cred-inf-row").style.display = oidc ? "none" : "";
+  document.getElementById("cred-foot").textContent = oidc
+    ? "The browser cannot request a GitHub Actions OIDC token or assume your AWS role. No AWS credential is entered, stored, or transmitted by this page. The Bright command runs in your own terminal."
+    : "The inference token stays in this browser tab, is sent only to the endpoint you're checking, and is cleared when you close this dialog. Nothing is stored, logged, or proxied. The Bright command runs in your own terminal.";
+  if (oidc) {
+    document.getElementById("cred-inf-meta").innerHTML =
+      `Browser validation is unavailable for GitHub OIDC. The generated workflow assumes <code>${esc(S.awsRoleArn)}</code> and accesses <code>${esc(plan.url)}</code>.`;
+    credStatus("cred-inf-status", "info", S.triggers.manual
+      ? "Commit the workflow, choose <b>Run workflow</b>, enable <code>preflight</code>, and run it to verify the role, Bedrock permissions, endpoint, and model without scanning."
+      : "Enable the <b>Manual</b> trigger to generate a <code>preflight</code> workflow input; browser-based OIDC validation is unavailable.");
+  } else {
+    document.getElementById("cred-inf-meta").innerHTML =
+      `Read-only check: <code>GET ${esc(plan.url)}</code> (no tokens spent). Confirms auth and that model <code>${esc(plan.model || "provider default")}</code> is available.`;
+    const n = document.getElementById("cred-inf-status"); n.className = "status"; n.innerHTML = "";
+  }
   // Bright can't be checked in-browser (CORS) — show the terminal command instead.
   document.getElementById("cred-bright-curl").textContent = G.brightCurl(S);
   document.getElementById("cred-bright-host").textContent = G.brightHost(S);
   credModal.classList.add("show");
-  document.getElementById("cred-inf-token").focus();
+  if (!oidc) document.getElementById("cred-inf-token").focus();
 }
 function closeCred() {
   credModal.classList.remove("show");
@@ -659,15 +741,22 @@ document.querySelectorAll(".reveal").forEach((b) => b.addEventListener("click", 
 }));
 
 document.getElementById("cred-inf-check").addEventListener("click", async () => {
+  const plan = G.inferenceCheckPlan(S, "");
+  if (plan.kind === "aws-oidc") {
+    credStatus("cred-inf-status", "info", S.triggers.manual
+      ? "Use <b>Run workflow</b> with the <code>preflight</code> input enabled; browser-based OIDC validation is unavailable."
+      : "Enable the <b>Manual</b> trigger to generate the <code>preflight</code> workflow input.");
+    return;
+  }
   const token = document.getElementById("cred-inf-token").value.trim();
   if (!token) { credStatus("cred-inf-status", "warn", "Enter your INFERENCE_TOKEN first."); return; }
-  const plan = G.inferenceCheckPlan(S, token);
-  credBusy("cred-inf-status", `Contacting <code>${esc(plan.url)}</code> …`);
+  const authenticatedPlan = G.inferenceCheckPlan(S, token);
+  credBusy("cred-inf-status", `Contacting <code>${esc(authenticatedPlan.url)}</code> …`);
   try {
-    const res = await fetch(plan.url, { method: plan.method, headers: plan.headers });
+    const res = await fetch(authenticatedPlan.url, { method: authenticatedPlan.method, headers: authenticatedPlan.headers });
     let body = null;
     try { body = await res.json(); } catch (e) { /* non-JSON body */ }
-    const r = G.interpretModelsResponse(res.status, body, plan.model);
+    const r = G.interpretModelsResponse(res.status, body, authenticatedPlan.model);
     credStatus("cred-inf-status", r.level, esc(r.msg));
   } catch (e) {
     credStatus("cred-inf-status", "warn",
