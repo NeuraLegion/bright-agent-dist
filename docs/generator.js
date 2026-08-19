@@ -50,9 +50,15 @@
     openai:      { t: "OpenAI", url: "https://api.openai.com/v1", model: "gpt-5.4-mini,gpt-5.4" },
     azure:       { t: "Azure OpenAI / Foundry", url: "https://<resource>.openai.azure.com/openai/v1", model: "gpt-5.4-mini,gpt-5.4" },
     anthropic:   { t: "Anthropic", url: "https://api.anthropic.com/v1", model: "claude-sonnet-5,claude-opus-4-8" },
+    bedrock:     { t: "AWS Bedrock", url: "https://bedrock-mantle.us-east-1.api.aws/v1", model: "" },
     ollama:      { t: "Ollama (self-hosted)", url: "http://localhost:11434/v1", model: "llama3.1" },
     custom:      { t: "Custom OpenAI-compatible", url: "https://your-gateway.example.com/v1", model: "" },
   };
+
+  // Known OpenAI Chat Completions-compatible Bedrock model ID. This is an
+  // example/placeholder rather than an implicit default: availability varies
+  // by AWS account and region, so the user must explicitly confirm AI_MODEL.
+  const BEDROCK_OIDC_MODEL_EXAMPLE = "openai.gpt-oss-120b-1:0";
 
   const ARCHES = ["bright-agent-linux-x64","bright-agent-linux-arm64","bright-agent-darwin-x64","bright-agent-darwin-arm64"];
 
@@ -73,6 +79,9 @@
       scope: "auto",
       provider: "openai",
       inferenceUrl: PROVIDERS.openai.url,
+      inferenceAuth: "token",
+      awsRoleArn: "",
+      awsRegion: "us-east-1",
       tokenMode: "builtin",
       defaultBranch: "main",
       version: "",
@@ -108,6 +117,83 @@
   const usesPR = (s) => activeTriggers(s).includes("pr");
   const usesSteering = (s) => activeTriggers(s).includes("steering");
   const needsRepoToken = (s) => s.tokenMode === "pat" || !PLATFORMS[s.platform].builtinToken;
+  const wantsAwsOidc = (s) => s.inferenceAuth === "aws-oidc";
+  const usesBedrockOidc = (s) => s.platform === "github" && s.provider === "bedrock" && wantsAwsOidc(s);
+
+  function bedrockInferenceUrl(region) {
+    return `https://bedrock-mantle.${String(region || "").trim() || "us-east-1"}.api.aws/v1`;
+  }
+
+  function effectiveInferenceUrl(s) {
+    return usesBedrockOidc(s) ? bedrockInferenceUrl(s.awsRegion) : s.inferenceUrl;
+  }
+
+  function effectiveAiModel(s) {
+    return (s.aiModel || "").trim() || (PROVIDERS[s.provider] && PROVIDERS[s.provider].model) || "";
+  }
+
+  const bedrockModelIds = (s) => String(s.aiModel || "").split(",").map((model) => model.trim()).filter(Boolean);
+  const bedrockFamilyPattern = (family) => new RegExp(
+    `^(?:(?:us|eu|apac|global)\\.)?${family}\\.[A-Za-z0-9][A-Za-z0-9_-]*(?:[.:][A-Za-z0-9][A-Za-z0-9_-]*)*$`,
+    "i",
+  );
+  const isBedrockAnthropicModel = (model) => bedrockFamilyPattern("anthropic").test(model);
+  const isBedrockOpenAiModel = (model) => bedrockFamilyPattern("openai").test(model);
+  function bedrockModelFamily(s) {
+    const models = bedrockModelIds(s);
+    if (!models.length) return null;
+    if (models.every(isBedrockAnthropicModel)) return "anthropic";
+    if (models.every(isBedrockOpenAiModel)) return "openai";
+    return null;
+  }
+
+  /** Blocking configuration errors surfaced by the browser before copy/download. */
+  function configurationErrors(s) {
+    const oidc = wantsAwsOidc(s);
+    const bedrock = s.provider === "bedrock";
+    if (!oidc && !bedrock) return [];
+
+    const errors = [];
+    if (oidc && s.platform !== "github") errors.push("AWS Bedrock OIDC generation is currently supported only for GitHub Actions.");
+    if (oidc && !bedrock) errors.push("AWS OIDC authentication requires the AWS Bedrock provider.");
+
+    if (oidc) {
+      const role = String(s.awsRoleArn || "").trim();
+      const roleMatch = /^arn:aws:iam::\d{12}:role\/(?:[A-Za-z0-9+=,.@_-]+\/)*[A-Za-z0-9+=,.@_-]+$/.exec(role);
+      if (!roleMatch || role.includes("${{") || /[\x00-\x1F\x7F]/.test(role)) {
+        errors.push("Enter a valid commercial-partition AWS IAM role ARN (arn:aws:iam::…), including the 12-digit account ID and a non-empty role name.");
+      }
+
+      const region = String(s.awsRegion || "").trim();
+      // Commercial regions supported by the generated .api.aws endpoint.
+      // Keep this compact list current when AWS launches another region.
+      const commercialRegion = /^(?:us-(?:east|west)-[12]|af-south-1|ap-(?:east-[12]|northeast-[123]|south-[12]|southeast-[1-7])|ca-(?:central|west)-1|eu-(?:central-[12]|north-1|south-[12]|west-[123])|il-central-1|me-(?:central|south)-1|mx-central-1|sa-east-1)$/;
+      if (!commercialRegion.test(region) || region.includes("${{") || /[\x00-\x1F\x7F]/.test(region)) {
+        errors.push("Enter a supported commercial AWS region such as us-east-1; China and GovCloud endpoints are not generated.");
+      }
+    }
+
+    if (bedrock) {
+      const modelChain = String(s.aiModel || "").trim();
+      const models = bedrockModelIds(s);
+      const safeModel = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+      if (!modelChain) {
+        errors.push("Enter an AWS Bedrock model or inference-profile ID in AI_MODEL.");
+      } else if (
+        modelChain.includes("${{") ||
+        /[\x00-\x1F\x7F]/.test(modelChain) ||
+        models.length === 0 ||
+        models.some((model) => !safeModel.test(model))
+      ) {
+        errors.push("AI_MODEL must contain only comma-separated Bedrock model or inference-profile IDs.");
+      } else if (!bedrockModelFamily(s)) {
+        errors.push("Use only OpenAI (openai.*) or Anthropic (anthropic.*) Bedrock IDs, and do not mix API families in one escalation chain.");
+      } else if (oidc && bedrockModelFamily(s) !== "openai") {
+        errors.push("Bedrock OIDC currently requires an OpenAI Chat Completions-compatible openai.* model; Anthropic/Claude IDs require Bedrock API-key mode.");
+      }
+    }
+    return errors;
+  }
 
   /** Extra scan knobs shared across platforms (same env var names everywhere). */
   function scanKnobs(s) {
@@ -117,7 +203,7 @@
     if (s.runMode === "validation") out.push({ k: "SARIF_PATH", v: s.sarifPath || "REPLACE_WITH_PATH_TO.sarif" });
     // AI_MODEL is baked into the file: use the explicit value, else the
     // provider's default model, so the generated workflow is self-describing.
-    const aiModel = (s.aiModel || "").trim() || (PROVIDERS[s.provider] && PROVIDERS[s.provider].model) || "";
+    const aiModel = effectiveAiModel(s);
     if (aiModel) out.push({ k: "AI_MODEL", v: aiModel });
     if ((s.serviceRoot || "").trim()) out.push({ k: "BRIGHT_SERVICE_ROOT", v: s.serviceRoot.trim() });
     if ((s.scmOverride || "").trim()) out.push({ k: "BRIGHT_SCM_PLATFORM", v: s.scmOverride.trim() });
@@ -148,9 +234,27 @@
   function inferenceEnvLines(s, indent, prefix) {
     const lines = [];
     // INFERENCE_URL is hardcoded from the builder selection (it's a plain,
-    // non-secret value), not read from a CI variable.
-    lines.push(`${indent}INFERENCE_URL: ${yamlScalar(s.inferenceUrl)}`);
-    lines.push(`${indent}INFERENCE_TOKEN: ${prefix.secret("INFERENCE_TOKEN")}`);
+    // non-secret value), not read from a CI variable. Bedrock OIDC derives the
+    // exact AWS-owned hostname from the selected region.
+    lines.push(`${indent}INFERENCE_URL: ${yamlScalar(effectiveInferenceUrl(s))}`);
+    if (s.provider === "bedrock") {
+      const family = bedrockModelFamily(s);
+      if (usesBedrockOidc(s)) {
+        // The generated IAM bearer token is compatible with Bedrock's OpenAI
+        // surface. Pin this contract so runtime model-name heuristics cannot
+        // accidentally select the Anthropic SDK and send it as x-api-key.
+        lines.push(`${indent}INFERENCE_PROVIDER: openai`);
+        lines.push(`${indent}AI_API_MODE: chat`);
+      } else if (family) {
+        // Pin token mode too: regional profiles such as us.anthropic.* do not
+        // match the runtime's legacy startsWith("anthropic.") heuristic.
+        lines.push(`${indent}INFERENCE_PROVIDER: ${family}`);
+        if (family === "openai") lines.push(`${indent}AI_API_MODE: chat`);
+      }
+    }
+    if (!usesBedrockOidc(s)) {
+      lines.push(`${indent}INFERENCE_TOKEN: ${prefix.secret("INFERENCE_TOKEN")}`);
+    }
     return lines;
   }
 
@@ -170,10 +274,21 @@
     if (t.pr) { L.push(`  pull_request:`); L.push(`    types: [opened, synchronize, reopened]`); }
     if (t.push) { L.push(`  push:`); L.push(`    branches: ["${s.defaultBranch}"]`); }
     if (t.steering) { L.push(`  issue_comment:`); L.push(`    types: [created]`); }
-    if (t.manual) L.push(`  workflow_dispatch: {}`);
+    if (t.manual) {
+      L.push(`  workflow_dispatch:`);
+      if (usesBedrockOidc(s)) {
+        L.push(`    inputs:`);
+        L.push(`      preflight:`);
+        L.push(`        description: Validate credentials and model without scanning`);
+        L.push(`        required: false`);
+        L.push(`        type: boolean`);
+        L.push(`        default: false`);
+      }
+    }
     if (t.schedule) { L.push(`  schedule:`); L.push(`    - cron: "0 3 * * *" # nightly 03:00 UTC`); }
     L.push(``);
     L.push(`permissions:`);
+    if (usesBedrockOidc(s)) L.push(`  id-token: write       # request a GitHub OIDC token for AWS`);
     L.push(`  contents: write        # commit fixes to the branch`);
     L.push(`  pull-requests: write   # open/update the PR + summary comment`);
     L.push(`  statuses: write        # set the "Bright Agent" commit status`);
@@ -239,12 +354,15 @@
 
     if (s.runMode === "validation" && s.sarifTool === "codeql") {
       L.push(`      - name: Initialize CodeQL`);
+      if (usesBedrockOidc(s) && t.manual) L.push(`        if: \${{ github.event_name != 'workflow_dispatch' || inputs.preflight != true }}`);
       L.push(`        uses: github/codeql-action/init@v3`);
       L.push(`        with:`);
       L.push(`          languages: ${s.sarifLanguage}`);
       L.push(`      - name: Autobuild`);
+      if (usesBedrockOidc(s) && t.manual) L.push(`        if: \${{ github.event_name != 'workflow_dispatch' || inputs.preflight != true }}`);
       L.push(`        uses: github/codeql-action/autobuild@v3`);
       L.push(`      - name: Analyze (write SARIF to temp)`);
+      if (usesBedrockOidc(s) && t.manual) L.push(`        if: \${{ github.event_name != 'workflow_dispatch' || inputs.preflight != true }}`);
       L.push(`        uses: github/codeql-action/analyze@v3`);
       L.push(`        with:`);
       L.push(`          output: \${{ runner.temp }}/sarif`);
@@ -260,6 +378,20 @@
     L.push(`          sha256sum -c "\${ASSET}.sha256"`);
     L.push(`          chmod +x "\${ASSET}"`);
 
+    // Configure exported AWS_* credentials as late as possible to shorten their
+    // lifetime in later steps. This is not a trust boundary: id-token: write is
+    // job-wide, so every same-repository process in this job must be trusted.
+    if (usesBedrockOidc(s)) {
+      const roleArn = String(s.awsRoleArn || "").trim() || "REPLACE_WITH_AWS_ROLE_ARN";
+      const region = String(s.awsRegion || "").trim() || "us-east-1";
+      L.push(`      - name: Configure AWS credentials through GitHub OIDC`);
+      L.push(`        uses: aws-actions/configure-aws-credentials@v4`);
+      L.push(`        with:`);
+      L.push(`          role-to-assume: ${yamlScalar(roleArn)}`);
+      L.push(`          aws-region: ${yamlScalar(region)}`);
+      L.push(`          role-session-name: bright-agent-\${{ github.run_id }}`);
+    }
+
     L.push(`      - name: Run Bright Agent`);
     L.push(`        env:`);
     L.push(`          LOCAL_REPO_PATH: \${{ github.workspace }}`);
@@ -267,6 +399,9 @@
     L.push(`          REPO_ACCESS_TOKEN: ${tokenRef}`);
     L.push(`          BRIGHT_TOKEN: \${{ secrets.BRIGHT_TOKEN }}`);
     inferenceEnvLines(s, "          ", { secret: (n) => `\${{ secrets.${n} }}` }).forEach((x) => L.push(x));
+    if (usesBedrockOidc(s) && t.manual) {
+      L.push(`          BRIGHT_PREFLIGHT_ONLY: \${{ github.event_name == 'workflow_dispatch' && inputs.preflight && '1' || '0' }}`);
+    }
     scanKnobs(s).forEach(({ k, v }) => {
       if (k === "SARIF_PATH" && s.runMode === "validation" && s.sarifTool === "codeql") {
         L.push(`          SARIF_PATH: \${{ runner.temp }}/sarif/${s.sarifLanguage}.sarif`);
@@ -679,11 +814,12 @@
   // -------------------------------------------------------------------------
   function secretRows(s) {
     // INFERENCE_URL and AI_MODEL are written into the workflow file itself, so
-    // they are not listed here as CI secrets/variables.
+    // they are not listed here as CI secrets/variables. Bedrock OIDC obtains
+    // temporary AWS credentials at runtime and therefore needs no inference secret.
     const rows = [
       ["BRIGHT_TOKEN", "Secret", "Bright API token from app.brightsec.com"],
-      ["INFERENCE_TOKEN", "Secret", "API key for your inference endpoint"],
     ];
+    if (!usesBedrockOidc(s)) rows.push(["INFERENCE_TOKEN", "Secret", "API key for your inference endpoint"]);
     if (needsRepoToken(s)) rows.push(["REPO_ACCESS_TOKEN", "Secret", "Token that can push branches and open PRs/MRs"]);
     return rows;
   }
@@ -694,6 +830,7 @@
     const parts = [`On <b>${esc(P.name)}</b>, runs on <b>${esc(trg || "—")}</b>`];
     parts.push(`in <b>${esc(RUN_MODES[s.runMode].t.replace(/ \(.*\)/, "").toLowerCase())}</b> mode`);
     if (s.runMode !== "validation") parts.push(`with <b>${esc(SCOPES[s.scope].t.replace(/ \(.*\)/, "").toLowerCase())}</b> scope`);
+    if (usesBedrockOidc(s)) parts.push(`using <b>AWS Bedrock IAM/OIDC</b>`);
     return parts.join(", ") + ".";
   }
 
@@ -728,6 +865,13 @@
     const t = s.triggers;
     if (s.platform === "github") {
       let out = "";
+      if (usesBedrockOidc(s)) {
+        out += `<div class="callout info"><span class="h">AWS role trust and permissions</span>The workflow adds job-wide <code>id-token: write</code> and uses <code>aws-actions/configure-aws-credentials@v4</code>. Configure the IAM role trust policy with audience <code>sts.amazonaws.com</code> and restrict the GitHub <code>sub</code> claim to this repository's pull-request, branch, or protected environment context. Any same-repository code executing in this job — including build tools and the application STAR starts — can request or use this role. Grant only <code>bedrock:InvokeModel</code> and, when needed, <code>bedrock:InvokeModelWithResponseStream</code> for the selected models or inference profiles; grant no unrelated AWS permissions, and keep the workflow disabled for fork PRs.</div>`;
+        out += `<div class="callout warn"><span class="h">Use an OpenAI-compatible Bedrock model</span>IAM bearer authentication is generated for Bedrock's OpenAI Chat Completions API. Anthropic/Claude model IDs use the native Messages client in this STAR release and require <b>Bedrock API key</b> mode instead.</div>`;
+        out += t.manual
+          ? `<p>The browser cannot test GitHub OIDC or assume the AWS role. Commit the workflow, choose <b>Run workflow</b>, enable the <code>preflight</code> input, and run it to validate credentials and model access without scanning.</p>`
+          : `<p>The browser cannot test GitHub OIDC or assume the AWS role. Enable the <b>Manual</b> trigger to generate a <code>preflight</code> workflow input for credential and model validation.</p>`;
+      }
       if (t.schedule || t.manual) out += `<p>Manual and nightly runs do a full baseline scan by design.</p>`;
       return out || `<p>No extra platform setup needed.</p>`;
     }
@@ -796,8 +940,12 @@
     secretRows(s).forEach(([n, ty, d]) => { tbl += `<tr><td><code>${esc(n)}</code></td><td>${esc(ty)}</td><td>${esc(d)}</td></tr>`; });
     tbl += `</tbody></table>`;
     h += docSection("2 · Add secrets & variables", `<p>Add these in <b>${esc(SETTINGS_LOC[s.platform])}</b>:</p>${tbl}`);
-    const effModel = (s.aiModel || "").trim() || (PROVIDERS[s.provider] && PROVIDERS[s.provider].model) || "";
-    h += `<div class="callout info"><span class="h">Inference is set in the file</span><code>INFERENCE_URL</code> (<code>${esc(s.inferenceUrl)}</code>)${effModel ? ` and <code>AI_MODEL</code> (<code>${esc(effModel)}</code>)` : ""} ${effModel ? "are" : "is"} written straight into the workflow from your selections above — no CI variable to add. Edit the file to change ${effModel ? "them" : "it"}.</div>`;
+    const effModel = effectiveAiModel(s);
+    const effUrl = effectiveInferenceUrl(s);
+    h += `<div class="callout info"><span class="h">Inference is set in the file</span><code>INFERENCE_URL</code> (<code>${esc(effUrl)}</code>)${effModel ? ` and <code>AI_MODEL</code> (<code>${esc(effModel)}</code>)` : ""} ${effModel ? "are" : "is"} written straight into the workflow from your selections above — no CI variable to add. Edit the file to change ${effModel ? "them" : "it"}.</div>`;
+    if (usesBedrockOidc(s)) {
+      h += `<div class="callout info"><span class="h">No static inference secret</span>The workflow requests a GitHub OIDC token, assumes <code>${esc(String(s.awsRoleArn || "").trim())}</code> in <code>${esc(String(s.awsRegion || "").trim())}</code>, and lets STAR generate a short-lived Bedrock token. Do not add <code>INFERENCE_TOKEN</code> or <code>OPENAI_API_KEY</code>.</div>`;
+    }
     if ((s.brightHostname || "").trim()) {
       h += `<div class="callout info"><span class="h">Custom Bright cluster</span><code>BRIGHT_HOSTNAME</code> (<code>${esc(s.brightHostname.trim())}</code>) is written into the workflow, pointing STAR at your cluster instead of the default <code>app.brightsec.com</code>. Leave the field blank to use the default.</div>`;
     }
@@ -844,9 +992,17 @@
    * interpretModelsResponse — whether the configured model is available.
    */
   function inferenceCheckPlan(s, token) {
-    const base = (s.inferenceUrl || "").trim().replace(/\/+$/, "");
-    const chain = ((s.aiModel || "").trim() || (PROVIDERS[s.provider] && PROVIDERS[s.provider].model) || "");
-    const model = chain.split(",")[0].trim();
+    const base = (effectiveInferenceUrl(s) || "").trim().replace(/\/+$/, "");
+    const model = effectiveAiModel(s).split(",")[0].trim();
+    if (usesBedrockOidc(s)) {
+      return {
+        kind: "aws-oidc",
+        model,
+        method: null,
+        url: base,
+        headers: {},
+      };
+    }
     let host = "";
     try { host = new URL(base).host.toLowerCase(); } catch (e) { host = ""; }
     const isAnthropic = s.provider === "anthropic" || /(^|\.)anthropic\.com$/.test(host);
@@ -1205,11 +1361,13 @@
 
   // -------------------------------------------------------------------------
   return {
-    PLATFORMS, TRIGGER_META, RUN_MODES, SCOPES, PROVIDERS, ARCHES, SETTINGS_LOC,
+    PLATFORMS, TRIGGER_META, RUN_MODES, SCOPES, PROVIDERS, BEDROCK_OIDC_MODEL_EXAMPLE, ARCHES, SETTINGS_LOC,
     defaultState,
     // helpers
     esc, dlBase, activeTriggers, usesPR, usesSteering,
-    needsRepoToken, scanKnobs, yamlScalar, shellQuote, groovyQuote, inferenceEnvLines,
+    needsRepoToken, wantsAwsOidc, usesBedrockOidc, bedrockInferenceUrl,
+    effectiveInferenceUrl, effectiveAiModel, bedrockModelIds, bedrockModelFamily, configurationErrors,
+    scanKnobs, yamlScalar, shellQuote, groovyQuote, inferenceEnvLines,
     // generators
     generateGitHub, generateGitLab, generateAzure, generateBitbucket, generateCircle, generateJenkins,
     generateYaml, fileName, codeLang,
