@@ -76,7 +76,7 @@ of `INFERENCE_TOKEN`.)
 The agent auto-detects the provider from the URL:
 - `api.openai.com` → OpenAI
 - `api.anthropic.com` → Anthropic (Claude)
-- `bedrock-mantle.<region>.api.aws` → AWS Bedrock (OpenAI-compatible)
+- `bedrock-mantle.<region>.api.aws` → AWS Bedrock (OpenAI-compatible, plus the native Claude Messages API for `anthropic.*` models)
 - `*.openai.azure.com` / `*.services.ai.azure.com` → Azure OpenAI / Foundry
 - `localhost:11434` → Ollama
 - Anything else → OpenAI-compatible
