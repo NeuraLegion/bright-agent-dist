@@ -769,7 +769,7 @@ function errorsFor(overrides) {
 test("bedrock provider and OIDC state have safe defaults", () => {
   assert.equal(G.PROVIDERS.bedrock.url, "https://bedrock-mantle.us-east-1.api.aws/v1");
   assert.equal(G.PROVIDERS.bedrock.model, "");
-  assert.equal(G.BEDROCK_OIDC_MODEL_EXAMPLE, "openai.gpt-oss-120b-1:0");
+  assert.equal(G.BEDROCK_OIDC_MODEL_EXAMPLE, "anthropic.claude-sonnet-4-20250514-v1:0");
   const s = G.defaultState();
   assert.equal(s.inferenceAuth, "token");
   assert.equal(s.awsRegion, "us-east-1");
@@ -804,14 +804,14 @@ test("configurationErrors validates OIDC platform, provider, commercial role, an
   }), /commercial-partition AWS IAM role ARN/);
 });
 
-test("configurationErrors rejects expressions, control characters, malformed models, and Claude in OIDC mode", () => {
+test("configurationErrors accepts Claude with OIDC and rejects expressions, control characters, and malformed models", () => {
   assert.match(errorsFor({ awsRoleArn: "arn:aws:iam::123456789012:role/name\nINFERENCE_TOKEN: stolen" }), /commercial-partition AWS IAM role ARN/);
   assert.match(errorsFor({ awsRegion: "${{ github.token }}" }), /supported commercial AWS region/);
   assert.match(errorsFor({ aiModel: "${{ github.token }}" }), /comma-separated Bedrock/);
   assert.match(errorsFor({ aiModel: "openai.gpt-oss-120b-1:0\nINFERENCE_TOKEN: stolen" }), /comma-separated Bedrock/);
   assert.match(errorsFor({ aiModel: "" }), /Enter an AWS Bedrock model/);
-  assert.match(errorsFor({ aiModel: "anthropic.claude-sonnet-4-20250514-v1:0" }), /OpenAI Chat Completions-compatible/);
-  assert.match(errorsFor({ aiModel: "us.anthropic.claude-sonnet-4-20250514-v1:0" }), /OpenAI Chat Completions-compatible/);
+  assert.deepEqual(G.configurationErrors(bedrockOidc({ aiModel: "anthropic.claude-sonnet-4-20250514-v1:0" })), []);
+  assert.deepEqual(G.configurationErrors(bedrockOidc({ aiModel: "us.anthropic.claude-sonnet-4-20250514-v1:0" })), []);
   assert.match(errorsFor({ aiModel: "amazon.nova-pro-v1:0" }), /Use only OpenAI/);
   assert.match(errorsFor({ aiModel: "openai." }), /Use only OpenAI/);
   assert.match(errorsFor({ aiModel: "us.openai." }), /Use only OpenAI/);
@@ -819,7 +819,7 @@ test("configurationErrors rejects expressions, control characters, malformed mod
   assert.match(errorsFor({ aiModel: "openai.gpt-oss-120b-1:0,anthropic.claude-sonnet-4-v1:0" }), /do not mix API families/);
 });
 
-test("github Bedrock OIDC YAML pins the bearer-compatible runtime route and omits static tokens", () => {
+test("github Bedrock OIDC YAML selects the Anthropic bearer route and omits static tokens", () => {
   const y = G.generateGitHub(bedrockOidc());
   assert.match(y, /id-token: write/);
   assert.match(y, /uses: aws-actions\/configure-aws-credentials@v4/);
@@ -827,6 +827,15 @@ test("github Bedrock OIDC YAML pins the bearer-compatible runtime route and omit
   assert.match(y, /aws-region: us-east-1/);
   assert.match(y, /role-session-name: bright-agent-\$\{\{ github\.run_id \}\}/);
   assert.match(y, /INFERENCE_URL: "https:\/\/bedrock-mantle\.us-east-1\.api\.aws\/v1"/);
+  assert.match(y, /INFERENCE_PROVIDER: anthropic/);
+  assert.match(y, /AI_MODEL: "anthropic\.claude-sonnet-4-20250514-v1:0"/);
+  assert.ok(!/AI_API_MODE/.test(y));
+  assert.ok(!/INFERENCE_TOKEN/.test(y));
+  assert.ok(!/OPENAI_API_KEY/.test(y));
+});
+
+test("github Bedrock OIDC YAML keeps OpenAI models on Chat Completions", () => {
+  const y = G.generateGitHub(bedrockOidc({ aiModel: "openai.gpt-oss-120b-1:0" }));
   assert.match(y, /INFERENCE_PROVIDER: openai/);
   assert.match(y, /AI_API_MODE: chat/);
   assert.match(y, /AI_MODEL: "openai\.gpt-oss-120b-1:0"/);
@@ -883,17 +892,24 @@ test("Bedrock API-key mode pins regional Anthropic profiles to the native client
   assert.ok(!/AI_API_MODE: chat/.test(y));
 });
 
-test("OIDC secret summary and setup docs explain trust, API mode, and generated preflight", () => {
+test("OIDC secret summary and setup docs explain trust, IAM permissions, API families, and preflight", () => {
   const s = bedrockOidc();
   assert.deepEqual(G.secretRows(s).map((r) => r[0]), ["BRIGHT_TOKEN"]);
   const d = G.generateDoc(s);
   assert.match(d, /No static inference secret/);
   assert.match(d, /sts\.amazonaws\.com/);
+  assert.match(d, /bedrock-mantle:CallWithBearerToken/);
+  assert.match(d, /bedrock-mantle:CreateInference/);
+  assert.ok(!/bedrock-mantle:ListModels/.test(d), "Anthropic preflight does not list models");
   assert.match(d, /bedrock:InvokeModel/);
-  assert.match(d, /no unrelated AWS permissions/);
-  assert.match(d, /OpenAI-compatible Bedrock model/);
+  assert.match(d, /no unrelated AWS permissions/i);
+  assert.match(d, /native Anthropic Messages route/);
+  assert.match(d, /OpenAI-compatible Chat Completions route/);
   assert.match(d, /enable the <code>preflight<\/code> input/);
   assert.ok(!/BRIGHT_PREFLIGHT_ONLY=1/.test(d));
+
+  const openAiDoc = G.generateDoc(bedrockOidc({ aiModel: "openai.gpt-oss-120b-1:0" }));
+  assert.match(openAiDoc, /bedrock-mantle:ListModels/);
 });
 
 test("OIDC browser validation returns a non-network AWS setup plan", () => {
