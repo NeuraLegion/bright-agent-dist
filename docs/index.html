@@ -578,7 +578,7 @@ function renderForm() {
       if (endpoint) endpoint.value = G.bedrockInferenceUrl(v);
     }, "us-east-1"));
     provExtra.push(readOnlyField("INFERENCE_URL", "Derived from AWS region and restricted to the AWS-owned Bedrock Mantle hostname.", G.bedrockInferenceUrl(S.awsRegion)));
-    provExtra.push(textField("AI_MODEL", "Required openai.* Bedrock model or inference-profile ID for the OpenAI Chat Completions route. Anthropic/Claude IDs require Bedrock API-key mode.", S.aiModel, (v) => { S.aiModel = v; }, G.BEDROCK_OIDC_MODEL_EXAMPLE));
+    provExtra.push(textField("AI_MODEL", "Required openai.* or anthropic.* Bedrock model or inference-profile ID. The workflow selects the matching API client; keep escalation chains within one API family.", S.aiModel, (v) => { S.aiModel = v; }, G.BEDROCK_OIDC_MODEL_EXAMPLE));
   } else {
     provExtra.push(textField("INFERENCE_URL", "Written directly into the generated workflow file (non-secret).", S.inferenceUrl, (v) => { S.inferenceUrl = v; }));
     const bedrockTokenMode = S.provider === "bedrock";

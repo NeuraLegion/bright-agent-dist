@@ -55,10 +55,10 @@
     custom:      { t: "Custom OpenAI-compatible", url: "https://your-gateway.example.com/v1", model: "" },
   };
 
-  // Known OpenAI Chat Completions-compatible Bedrock model ID. This is an
+  // Known Anthropic Messages-compatible Bedrock model ID. This is an
   // example/placeholder rather than an implicit default: availability varies
   // by AWS account and region, so the user must explicitly confirm AI_MODEL.
-  const BEDROCK_OIDC_MODEL_EXAMPLE = "openai.gpt-oss-120b-1:0";
+  const BEDROCK_OIDC_MODEL_EXAMPLE = "anthropic.claude-sonnet-4-20250514-v1:0";
 
   const ARCHES = ["bright-agent-linux-x64","bright-agent-linux-arm64","bright-agent-darwin-x64","bright-agent-darwin-arm64"];
 
@@ -188,8 +188,6 @@
         errors.push("AI_MODEL must contain only comma-separated Bedrock model or inference-profile IDs.");
       } else if (!bedrockModelFamily(s)) {
         errors.push("Use only OpenAI (openai.*) or Anthropic (anthropic.*) Bedrock IDs, and do not mix API families in one escalation chain.");
-      } else if (oidc && bedrockModelFamily(s) !== "openai") {
-        errors.push("Bedrock OIDC currently requires an OpenAI Chat Completions-compatible openai.* model; Anthropic/Claude IDs require Bedrock API-key mode.");
       }
     }
     return errors;
@@ -239,15 +237,11 @@
     lines.push(`${indent}INFERENCE_URL: ${yamlScalar(effectiveInferenceUrl(s))}`);
     if (s.provider === "bedrock") {
       const family = bedrockModelFamily(s);
-      if (usesBedrockOidc(s)) {
-        // The generated IAM bearer token is compatible with Bedrock's OpenAI
-        // surface. Pin this contract so runtime model-name heuristics cannot
-        // accidentally select the Anthropic SDK and send it as x-api-key.
-        lines.push(`${indent}INFERENCE_PROVIDER: openai`);
-        lines.push(`${indent}AI_API_MODE: chat`);
-      } else if (family) {
-        // Pin token mode too: regional profiles such as us.anthropic.* do not
-        // match the runtime's legacy startsWith("anthropic.") heuristic.
+      if (family) {
+        // Pin the API client explicitly for both OIDC and API-key modes.
+        // This is required for regional profiles such as us.anthropic.* and
+        // ensures Bedrock bearer tokens use the Anthropic Messages client for
+        // Claude models and the Chat Completions client for OpenAI models.
         lines.push(`${indent}INFERENCE_PROVIDER: ${family}`);
         if (family === "openai") lines.push(`${indent}AI_API_MODE: chat`);
       }
@@ -866,8 +860,12 @@
     if (s.platform === "github") {
       let out = "";
       if (usesBedrockOidc(s)) {
-        out += `<div class="callout info"><span class="h">AWS role trust and permissions</span>The workflow adds job-wide <code>id-token: write</code> and uses <code>aws-actions/configure-aws-credentials@v4</code>. Configure the IAM role trust policy with audience <code>sts.amazonaws.com</code> and restrict the GitHub <code>sub</code> claim to this repository's pull-request, branch, or protected environment context. Any same-repository code executing in this job — including build tools and the application STAR starts — can request or use this role. Grant only <code>bedrock:InvokeModel</code> and, when needed, <code>bedrock:InvokeModelWithResponseStream</code> for the selected models or inference profiles; grant no unrelated AWS permissions, and keep the workflow disabled for fork PRs.</div>`;
-        out += `<div class="callout warn"><span class="h">Use an OpenAI-compatible Bedrock model</span>IAM bearer authentication is generated for Bedrock's OpenAI Chat Completions API. Anthropic/Claude model IDs use the native Messages client in this STAR release and require <b>Bedrock API key</b> mode instead.</div>`;
+        const family = bedrockModelFamily(s);
+        const modelListPermission = family === "openai"
+          ? ` Grant <code>bedrock-mantle:ListModels</code> when preflight should verify model availability.`
+          : "";
+        out += `<div class="callout info"><span class="h">AWS role trust and permissions</span>The workflow adds job-wide <code>id-token: write</code> and uses <code>aws-actions/configure-aws-credentials@v4</code>. Configure the IAM role trust policy with audience <code>sts.amazonaws.com</code> and restrict the GitHub <code>sub</code> claim to this repository's pull-request, branch, or protected environment context. Any same-repository code executing in this job — including build tools and the application STAR starts — can request or use this role. For the Bedrock Mantle endpoint, grant <code>bedrock-mantle:CallWithBearerToken</code> so the short-term token can be used and <code>bedrock-mantle:CreateInference</code> on the intended Mantle project.${modelListPermission} Also grant <code>bedrock:InvokeModel</code> and, when needed, <code>bedrock:InvokeModelWithResponseStream</code> for the selected models or inference profiles. Grant no unrelated AWS permissions, and keep the workflow disabled for fork PRs.</div>`;
+        out += `<div class="callout info"><span class="h">Model API family</span>The generated workflow selects the API client from <code>AI_MODEL</code>: <code>anthropic.*</code> models use Bedrock's native Anthropic Messages route with IAM Bearer authentication, while <code>openai.*</code> models use the OpenAI-compatible Chat Completions route. Keep every model in an escalation chain within the same API family.</div>`;
         out += t.manual
           ? `<p>The browser cannot test GitHub OIDC or assume the AWS role. Commit the workflow, choose <b>Run workflow</b>, enable the <code>preflight</code> input, and run it to validate credentials and model access without scanning.</p>`
           : `<p>The browser cannot test GitHub OIDC or assume the AWS role. Enable the <b>Manual</b> trigger to generate a <code>preflight</code> workflow input for credential and model validation.</p>`;
