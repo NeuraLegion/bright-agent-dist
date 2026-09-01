@@ -225,10 +225,33 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ---- architecture diagram ------------------------------------------------ */
+  body.modal-open { overflow: hidden; }
   .arch-card { margin-top: 20px; }
   .arch-head { display: flex; align-items: baseline; gap: 10px; padding: 14px 18px 0; flex-wrap: wrap; }
   .arch-head h2 { font-size: 14px; margin: 0; letter-spacing: -0.01em; }
   .arch-wrap { padding: 8px 14px 0; }
+  .arch-trigger { display: block; position: relative; width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: initial; cursor: zoom-in; border-radius: 10px; transition: background .18s, box-shadow .18s; }
+  .arch-trigger::after { content: "Enlarge"; position: absolute; top: 14px; right: 20px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: rgba(255,255,255,.92); color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .01em; box-shadow: 0 2px 8px rgba(25,29,52,.08); opacity: .72; pointer-events: none; }
+  .arch-trigger:hover { background: rgba(122,92,255,.025); }
+  .arch-trigger:hover::after, .arch-trigger:focus-visible::after { color: var(--navy); opacity: 1; }
+  .arch-trigger:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(226,91,197,.2); }
+  .arch-behavior { margin: 10px 18px 0; padding: 8px 12px; font-size: 12px; }
+  .arch-behavior p { margin: 3px 0; }
+  .arch-behavior ul { margin: 5px 0 0; padding-left: 18px; }
+  .arch-behavior li { margin: 3px 0; }
+  .arch-behavior code { font-family: "JetBrains Mono", monospace; font-size: 11px; background: rgba(255,255,255,.75); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; color: var(--navy); }
+  .arch-modal-overlay { align-items: center; padding: 20px; }
+  .arch-modal { display: flex; flex-direction: column; width: 94vw; max-width: 1400px; max-height: calc(100vh - 40px); }
+  .arch-modal .m-body { min-height: 0; overflow: auto; padding: 18px 20px 10px; }
+  .arch-modal-svg { min-width: 900px; }
+  .arch-modal-svg svg { display: block; width: 100%; height: auto; }
+  .arch-modal .arch-cap { margin: 0; padding: 2px 20px 18px; }
+  @media (max-width: 720px) {
+    .arch-trigger::after { content: "Zoom"; top: 10px; right: 12px; }
+    .arch-modal-overlay { padding: 10px; }
+    .arch-modal { width: 100%; max-height: calc(100vh - 20px); }
+    .arch-modal-svg { min-width: 760px; }
+  }
   svg.arch { display: block; width: 100%; height: auto; }
   svg.arch text { font-family: inherit; }
 
@@ -335,7 +358,8 @@
           <h2>What this configuration does</h2>
           <span class="hint" id="arch-sum"></span>
         </div>
-        <div class="arch-wrap" id="arch-svg"></div>
+        <button class="arch-wrap arch-trigger" id="arch-svg" type="button" aria-label="Enlarge workflow architecture diagram" aria-haspopup="dialog" aria-controls="arch-modal" title="Click to enlarge the diagram"></button>
+        <div class="callout info arch-behavior" id="arch-behavior"></div>
         <p class="arch-cap" id="arch-cap"></p>
         <div class="arch-key">
           <span class="k k-control">orchestration</span>
@@ -354,6 +378,19 @@
   STAR ships as a self-contained binary from <a href="https://github.com/NeuraLegion/bright-agent-dist">bright-agent-dist</a>.
   Templates mirror <span class="path">examples/ci/</span>. Generated files use the latest release by default — pin a version for reproducible runs.
 </footer>
+
+<div class="modal-overlay arch-modal-overlay" id="arch-modal" aria-hidden="true">
+  <div class="modal arch-modal" role="dialog" aria-modal="true" aria-labelledby="arch-modal-title">
+    <div class="m-head">
+      <h2 id="arch-modal-title">Workflow architecture</h2>
+      <button class="x" id="arch-modal-close" type="button" aria-label="Close enlarged diagram">&times;</button>
+    </div>
+    <div class="m-body">
+      <div class="arch-modal-svg" id="arch-modal-svg"></div>
+    </div>
+    <p class="arch-cap" id="arch-modal-cap"></p>
+  </div>
+</div>
 
 <div class="modal-overlay" id="cred-modal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cred-title">
@@ -643,6 +680,7 @@ function refresh(rerenderForm) {
   document.getElementById("out-code").innerHTML = G.highlight(currentYaml, G.codeLang(S));
   document.getElementById("out-doc").innerHTML = G.generateDoc(S);
   document.getElementById("arch-svg").innerHTML = G.generateDiagram(S);
+  document.getElementById("arch-behavior").innerHTML = G.workflowBehavior(S);
   document.getElementById("arch-cap").textContent = G.diagramCaption(S);
   document.getElementById("arch-sum").innerHTML = G.summaryLine(S);
   const errors = G.configurationErrors(S);
@@ -688,6 +726,42 @@ document.getElementById("btn-copy").addEventListener("click", copyYaml);
 document.getElementById("btn-download").addEventListener("click", downloadFile);
 document.getElementById("tab-yaml").addEventListener("click", () => switchTab("yaml"));
 document.getElementById("tab-doc").addEventListener("click", () => switchTab("doc"));
+
+// --- enlarged architecture diagram -----------------------------------------
+const archTrigger = document.getElementById("arch-svg");
+const archModal = document.getElementById("arch-modal");
+const archModalSvg = document.getElementById("arch-modal-svg");
+const archModalClose = document.getElementById("arch-modal-close");
+let archReturnFocus = null;
+function openArchModal() {
+  const svg = archTrigger.querySelector("svg");
+  if (!svg || archModal.classList.contains("show")) return;
+  archReturnFocus = document.activeElement;
+  archModalSvg.replaceChildren(svg);
+  document.getElementById("arch-modal-cap").textContent = document.getElementById("arch-cap").textContent;
+  archModal.classList.add("show");
+  archModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  archModalClose.focus();
+}
+function closeArchModal() {
+  if (!archModal.classList.contains("show")) return;
+  const svg = archModalSvg.querySelector("svg");
+  if (svg) archTrigger.replaceChildren(svg);
+  archModal.classList.remove("show");
+  archModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("modal-open");
+  if (archReturnFocus && typeof archReturnFocus.focus === "function") archReturnFocus.focus();
+  archReturnFocus = null;
+}
+archTrigger.addEventListener("click", openArchModal);
+archModalClose.addEventListener("click", closeArchModal);
+archModal.addEventListener("click", (e) => { if (e.target === archModal) closeArchModal(); });
+document.addEventListener("keydown", (e) => {
+  if (!archModal.classList.contains("show")) return;
+  if (e.key === "Escape") closeArchModal();
+  else if (e.key === "Tab") { e.preventDefault(); archModalClose.focus(); }
+});
 
 // --- credential validation (runs entirely in this tab) ----------------------
 const credModal = document.getElementById("cred-modal");
