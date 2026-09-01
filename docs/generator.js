@@ -27,7 +27,7 @@
 
   const TRIGGER_META = {
     pr:       { t: "Pull / merge request", d: "Diff-scoped scan on each PR; reacts into it (fixes, sticky comment, status)." },
-    push:     { t: "Push to default branch", d: "Continuous scan of the commit diff after merge." },
+    push:     { t: "Branch push", d: "Diff-scoped scan of every regular branch push against its previous tip; bright-scan-* branches are excluded." },
     schedule: { t: "Nightly schedule", d: "Full-repo baseline every night." },
     manual:   { t: "Manual dispatch", d: "Run on demand from the CI UI." },
     steering: { t: "/bright-agent comment steering", d: "Re-run a PR with human guidance from a comment." },
@@ -41,7 +41,7 @@
   };
 
   const SCOPES = {
-    auto:    { t: "Auto (recommended)", d: "Diff-scoped on PR/MR when a base ref exists, else full." },
+    auto:    { t: "Auto (recommended)", d: "Diff-scoped on PR/MR, steering, and branch-push events; full on manual and scheduled runs." },
     changed: { t: "Force diff", d: "Always scope to the changed files; needs a base ref." },
     full:    { t: "Force full", d: "Scan the whole repository regardless of trigger." },
   };
@@ -265,8 +265,15 @@
     L.push(`name: Bright Agent (DAST)`);
     L.push(``);
     L.push(`on:`);
-    if (t.pr) { L.push(`  pull_request:`); L.push(`    types: [opened, synchronize, reopened]`); }
-    if (t.push) { L.push(`  push:`); L.push(`    branches: ["${s.defaultBranch}"]`); }
+    if (t.pr) {
+      L.push(`  pull_request:`);
+      L.push(`    branches: ["${s.defaultBranch}"]`);
+      L.push(`    types: [opened, synchronize, reopened]`);
+    }
+    if (t.push) {
+      L.push(`  push:`);
+      L.push(`    branches-ignore: ["bright-scan-*"]`);
+    }
     if (t.steering) { L.push(`  issue_comment:`); L.push(`    types: [created]`); }
     if (t.manual) {
       L.push(`  workflow_dispatch:`);
@@ -296,8 +303,8 @@
     L.push(`  bright-agent:`);
 
     const gate = [];
-    if (t.pr) gate.push(`(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)`);
-    if (t.push) gate.push(`github.event_name == 'push'`);
+    if (t.pr) gate.push(`(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'bright-scan-'))`);
+    if (t.push) gate.push(`(github.event_name == 'push' && github.event.created == false && github.event.deleted == false)`);
     if (t.steering) gate.push(`(github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/bright-agent') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))`);
     if (t.manual) gate.push(`github.event_name == 'workflow_dispatch'`);
     if (t.schedule) gate.push(`github.event_name == 'schedule'`);
@@ -335,6 +342,7 @@
     const refParts = [];
     if (t.steering) refParts.push(`(github.event_name == 'issue_comment' && steps.steer.outputs.head_ref)`);
     if (t.pr) refParts.push(`(github.event_name == 'pull_request' && github.event.pull_request.head.ref)`);
+    if (t.push) refParts.push(`(github.event_name == 'push' && github.sha)`);
     if (refParts.length) {
       L.push(`        with:`);
       L.push(`          ref: >-`);
@@ -344,6 +352,18 @@
     } else {
       L.push(`        with:`);
       L.push(`          fetch-depth: 0`);
+    }
+
+    if (t.push && s.runMode !== "validation" && s.scope !== "full") {
+      L.push(`      - name: Ensure push base commit is available`);
+      L.push(`        if: github.event_name == 'push'`);
+      L.push(`        env:`);
+      L.push(`          BEFORE_SHA: \${{ github.event.before }}`);
+      L.push(`        run: |`);
+      L.push(`          if ! git cat-file -e "\${BEFORE_SHA}^{commit}" 2>/dev/null; then`);
+      L.push(`            git fetch --no-tags origin "\${BEFORE_SHA}"`);
+      L.push(`          fi`);
+      L.push(`          git cat-file -e "\${BEFORE_SHA}^{commit}"`);
     }
 
     if (s.runMode === "validation" && s.sarifTool === "codeql") {
@@ -396,7 +416,21 @@
     if (usesBedrockOidc(s) && t.manual) {
       L.push(`          BRIGHT_PREFLIGHT_ONLY: \${{ github.event_name == 'workflow_dispatch' && inputs.preflight && '1' || '0' }}`);
     }
-    scanKnobs(s).forEach(({ k, v }) => {
+    const hasFullTrigger = t.manual || t.schedule;
+    const hasDiffTrigger = t.pr || t.push || t.steering;
+    if (s.runMode !== "validation") {
+      let scanScope = s.scope;
+      if (s.scope === "auto") {
+        const fullEvents = [];
+        if (t.manual) fullEvents.push("github.event_name == 'workflow_dispatch'");
+        if (t.schedule) fullEvents.push("github.event_name == 'schedule'");
+        scanScope = hasFullTrigger && hasDiffTrigger
+          ? `\${{ (${fullEvents.join(" || ")}) && 'full' || 'changed' }}`
+          : (hasFullTrigger ? "full" : "changed");
+      }
+      L.push(`          SCAN_SCOPE: ${scanScope}`);
+    }
+    scanKnobs(s).filter(({ k }) => k !== "SCAN_SCOPE").forEach(({ k, v }) => {
       if (k === "SARIF_PATH" && s.runMode === "validation" && s.sarifTool === "codeql") {
         L.push(`          SARIF_PATH: \${{ runner.temp }}/sarif/${s.sarifLanguage}.sarif`);
       } else {
@@ -411,12 +445,24 @@
       L.push(`          BRIGHT_STEERING_PR_NUMBER: \${{ github.event_name == 'issue_comment' && github.event.issue.number || '' }}`);
       L.push(`          BRIGHT_STEERING_PR_HEAD: \${{ steps.steer.outputs.head_ref }}`);
       L.push(`          BRIGHT_STEERING_PR_BASE: \${{ steps.steer.outputs.base_ref }}`);
-      // On an issue_comment (/bright-agent) trigger GITHUB_BASE_REF is empty, so
-      // the agent cannot auto-derive the PR base and would fall back to a full
-      // scan. Pass the resolved PR base explicitly as DIFF_BASE (origin/<base>)
-      // so the steered run is diff-scoped to the PR's changes. Empty on every
-      // other trigger, so PR/push/manual/schedule runs are unaffected.
-      L.push(`          DIFF_BASE: \${{ steps.steer.outputs.base_ref && format('origin/{0}', steps.steer.outputs.base_ref) || '' }}`);
+    }
+    if (s.runMode !== "validation" && s.scope !== "full") {
+      const diffBases = [];
+      if (t.steering) diffBases.push({
+        event: "issue_comment",
+        value: "steps.steer.outputs.base_ref && format('origin/{0}', steps.steer.outputs.base_ref) || ''",
+      });
+      if (t.pr) diffBases.push({
+        event: "pull_request",
+        value: "format('origin/{0}', github.event.pull_request.base.ref)",
+      });
+      if (t.push) diffBases.push({ event: "push", value: "github.event.before" });
+      if (diffBases.length) {
+        const diffBase = diffBases.length === 1 && !hasFullTrigger
+          ? diffBases[0].value
+          : diffBases.map(({ event, value }) => `(github.event_name == '${event}' && (${value}) || '')`).join(" || ");
+        L.push(`          DIFF_BASE: \${{ ${diffBase} }}`);
+      }
     }
     L.push(`        run: "\${{ runner.temp }}/\${{ env.ASSET }}"`);
     if (s.debug) {

@@ -27,6 +27,7 @@ test("defaultState is GitHub, sensible defaults", () => {
   assert.equal(s.runMode, "full");
   assert.equal(s.scope, "auto");
   assert.equal(s.tokenMode, "builtin");
+  assert.deepEqual(s.triggers, { pr: true, push: false, schedule: true, manual: true, steering: true });
   assert.deepEqual(Object.keys(s.triggers).sort(), ["manual","pr","push","schedule","steering"]);
 });
 
@@ -37,6 +38,12 @@ test("defaultState returns a fresh object each call", () => {
   const b = G.defaultState();
   assert.equal(b.platform, "github");
   assert.equal(b.triggers.pr, true);
+});
+
+test("push metadata describes branch diff against the previous tip", () => {
+  assert.match(G.TRIGGER_META.push.t, /Branch push/);
+  assert.match(G.TRIGGER_META.push.d, /previous tip/);
+  assert.match(G.TRIGGER_META.push.d, /bright-scan-\*/);
 });
 
 test("every platform has a file and at least one trigger", () => {
@@ -188,33 +195,71 @@ test("fileName and codeLang", () => {
 // ---------------------------------------------------------------------------
 // GitHub specifics
 // ---------------------------------------------------------------------------
-test("github: on-block reflects selected triggers only", () => {
-  const y = G.generateGitHub(st({ triggers: only("pr") }));
-  assert.match(y, /pull_request:/);
-  assert.ok(!/issue_comment:/.test(y));
-  assert.ok(!/schedule:/.test(y));
-  assert.ok(!/workflow_dispatch/.test(y));
+test("github: each trigger emits only its event and auto scope class", () => {
+  const cases = [
+    ["manual", "workflow_dispatch", "full", false],
+    ["schedule", "schedule", "full", false],
+    ["pr", "pull_request", "changed", true],
+    ["push", "push", "changed", true],
+    ["steering", "issue_comment", "changed", true],
+  ];
+  const eventNames = cases.map(([, event]) => event);
+  for (const [trigger, event, scope, hasBase] of cases) {
+    const y = G.generateGitHub(st({ triggers: only(trigger) }));
+    assert.match(y, new RegExp(`^  ${event}:`, "m"), `${trigger} event`);
+    for (const other of eventNames.filter((name) => name !== event)) {
+      assert.doesNotMatch(y, new RegExp(`^  ${other}:`, "m"), `${trigger} excludes ${other}`);
+    }
+    assert.match(y, new RegExp(`^          SCAN_SCOPE: ${scope}$`, "m"), `${trigger} scope`);
+    assert.equal(/^          DIFF_BASE:/m.test(y), hasBase, `${trigger} base`);
+    assert.match(y, /fetch-depth: 0/, `${trigger} full history`);
+  }
 });
-test("github: steering adds resolve step, issue_comment trigger, and steering env", () => {
-  const y = G.generateGitHub(st({ triggers: only("pr", "steering") }));
-  assert.match(y, /issue_comment:/);
+test("github: mixed auto scope is event-aware and only names selected full triggers", () => {
+  const manualAndPr = G.generateGitHub(st({ triggers: only("manual", "pr") }));
+  assert.match(
+    manualAndPr,
+    /SCAN_SCOPE: \$\{\{ \(github\.event_name == 'workflow_dispatch'\) && 'full' \|\| 'changed' \}\}/,
+  );
+  const scopeLine = manualAndPr.split("\n").find((line) => line.includes("SCAN_SCOPE:"));
+  assert.ok(!scopeLine.includes("schedule"));
+
+  const allKinds = G.generateGitHub(st({ triggers: only("manual", "schedule", "push") }));
+  assert.match(
+    allKinds,
+    /SCAN_SCOPE: \$\{\{ \(github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'schedule'\) && 'full' \|\| 'changed' \}\}/,
+  );
+});
+test("github: explicit scope overrides auto and bases are omitted only for full", () => {
+  const changed = G.generateGitHub(st({ scope: "changed", triggers: only("manual", "pr") }));
+  assert.match(changed, /^          SCAN_SCOPE: changed$/m);
+  assert.match(changed, /^          DIFF_BASE:/m);
+
+  const full = G.generateGitHub(st({ scope: "full", triggers: only("manual", "pr", "push", "steering") }));
+  assert.match(full, /^          SCAN_SCOPE: full$/m);
+  assert.doesNotMatch(full, /^          DIFF_BASE:/m);
+  assert.doesNotMatch(full, /Ensure push base commit is available/);
+});
+test("github: steering preserves fork protection, head checkout, steering env, and resolved base", () => {
+  const y = G.generateGitHub(st({ triggers: only("steering") }));
   assert.match(y, /Resolve steering PR \(refuse forks\)/);
+  assert.match(y, /pr\.head\.repo && pr\.head\.repo\.full_name/);
+  assert.match(y, /core\.setFailed\("Steering disabled on fork PRs\."\)/);
+  assert.match(y, /github\.event_name == 'issue_comment' && steps\.steer\.outputs\.head_ref/);
   assert.match(y, /BRIGHT_STEERING_COMMENT:/);
+  assert.match(y, /BRIGHT_STEERING_PR_HEAD:/);
   assert.match(y, /BRIGHT_STEERING_PR_BASE:/);
-});
-test("github: steering sets DIFF_BASE from the resolved PR base (diff-scoped steered run)", () => {
-  const y = G.generateGitHub(st({ triggers: only("pr", "steering") }));
   assert.match(
     y,
     /DIFF_BASE: \$\{\{ steps\.steer\.outputs\.base_ref && format\('origin\/\{0\}', steps\.steer\.outputs\.base_ref\) \|\| '' \}\}/,
   );
 });
-test("github: no steering → no steering plumbing and no DIFF_BASE", () => {
+test("github: full-only triggers have no steering plumbing or DIFF_BASE", () => {
   const y = G.generateGitHub(st({ triggers: only("schedule", "manual") }));
-  assert.ok(!/issue_comment/.test(y));
+  assert.doesNotMatch(y, /^  issue_comment:/m);
   assert.ok(!/BRIGHT_STEERING_/.test(y));
   assert.ok(!/Resolve steering PR/.test(y));
-  assert.ok(!/DIFF_BASE/.test(y));
+  assert.doesNotMatch(y, /^          DIFF_BASE:/m);
 });
 test("github: checkout ref is a wrapped expression when pr/steering present", () => {
   const y = G.generateGitHub(st({ triggers: only("pr", "steering") }));
@@ -222,7 +267,7 @@ test("github: checkout ref is a wrapped expression when pr/steering present", ()
   assert.match(y, /\$\{\{ \(github\.event_name == 'issue_comment'/);
   assert.match(y, /\|\| github\.ref \}\}/);
 });
-test("github: push/schedule only → no ref override, just fetch-depth", () => {
+test("github: schedule only has no ref override and always fetches full history", () => {
   const y = G.generateGitHub(st({ triggers: only("schedule") }));
   assert.ok(!/ref: >-/.test(y));
   assert.match(y, /fetch-depth: 0/);
@@ -263,9 +308,40 @@ test("github: validation with external SARIF uses the provided path", () => {
   assert.ok(!/codeql-action/.test(y));
   assert.match(y, /SARIF_PATH: x\/results\.sarif/);
 });
-test("github: default branch flows into push trigger", () => {
+test("github: validation omits scan scope and diff base for every diff trigger", () => {
+  const y = G.generateGitHub(st({
+    runMode: "validation",
+    sarifTool: "other",
+    sarifPath: "x/results.sarif",
+    scope: "changed",
+    triggers: only("pr", "push", "steering"),
+  }));
+  assert.doesNotMatch(y, /^          SCAN_SCOPE:/m);
+  assert.doesNotMatch(y, /^          DIFF_BASE:/m);
+  assert.doesNotMatch(y, /Ensure push base commit is available/);
+  assert.match(y, /^          SARIF_PATH: x\/results\.sarif$/m);
+});
+test("github: push covers ordinary branches, rejects lifecycle pushes, checks out SHA, and verifies before SHA", () => {
   const y = G.generateGitHub(st({ triggers: only("push"), defaultBranch: "trunk" }));
-  assert.match(y, /branches: \["trunk"\]/);
+  assert.match(y, /push:\n    branches-ignore: \["bright-scan-\*"\]/);
+  assert.doesNotMatch(y, /branches: \["trunk"\]/);
+  assert.match(y, /github\.event\.created == false && github\.event\.deleted == false/);
+  assert.match(y, /github\.event_name == 'push' && github\.sha/);
+  assert.match(y, /BEFORE_SHA: \$\{\{ github\.event\.before \}\}/);
+  assert.match(y, /DIFF_BASE: \$\{\{ github\.event\.before \}\}/);
+  assert.equal((y.match(/git cat-file -e "\$\{BEFORE_SHA\}\^\{commit\}"/g) || []).length, 2);
+  assert.match(y, /git fetch --no-tags origin "\$\{BEFORE_SHA\}"/);
+  assert.ok(y.indexOf("actions/checkout@v5") < y.indexOf("Ensure push base commit is available"));
+  assert.ok(y.indexOf("Ensure push base commit is available") < y.indexOf("Download & verify Bright Agent"));
+});
+test("github: pull requests target default branch, reject forks/scan branches, and diff from actual base", () => {
+  const y = G.generateGitHub(st({ triggers: only("pr"), defaultBranch: "trunk" }));
+  assert.match(y, /pull_request:\n    branches: \["trunk"\]/);
+  assert.match(y, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.match(y, /!startsWith\(github\.event\.pull_request\.head\.ref, 'bright-scan-'\)/);
+  assert.match(y, /github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.ref/);
+  assert.match(y, /DIFF_BASE: \$\{\{ format\('origin\/\{0\}', github\.event\.pull_request\.base\.ref\) \}\}/);
+  assert.doesNotMatch(y, /DIFF_BASE:.*origin\/trunk/);
 });
 
 // ---------------------------------------------------------------------------

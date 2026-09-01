@@ -535,7 +535,7 @@ function renderForm() {
     });
     const only = activeTriggers().every((t) => t === "schedule" || t === "manual");
     const scopeNote = only && S.scope === "auto"
-      ? el("div", { class: "sub", style: "margin-top:10px" }, "With only scheduled/manual triggers, auto resolves to a full scan. Set “Force full” to be explicit.")
+      ? el("div", { class: "sub", style: "margin-top:10px" }, "With only scheduled/manual triggers, Auto generates an explicit full scan.")
       : null;
     root.appendChild(card("Scan scope", "what gets scanned", scopeNote ? [scopeOpts, scopeNote] : [scopeOpts]));
   }
@@ -613,7 +613,7 @@ function renderForm() {
   const adv = [];
   adv.push(selectField("Runner OS / arch", "Pick the asset matching your runner.", ARCHES.map((a) => [a, a.replace("bright-agent-", "")]), S.asset, (v) => { S.asset = v; }));
   adv.push(textField("Pin version (optional)", "Empty = latest release. Otherwise a release tag for reproducible runs.", S.version, (v) => { S.version = v; }, "v0.1.1"));
-  if (usesPR() || S.triggers.push) adv.push(textField("Default branch", "Used for PR base / push trigger.", S.defaultBranch, (v) => { S.defaultBranch = v; }, "main"));
+  if (usesPR()) adv.push(textField("Default branch", "Filters pull requests by target branch; the event's actual base branch is used for the diff.", S.defaultBranch, (v) => { S.defaultBranch = v; }, "main"));
   adv.push(textField("Monorepo service root (optional)", "BRIGHT_SERVICE_ROOT — usually auto-detected.", S.serviceRoot, (v) => { S.serviceRoot = v; }, "apps/monolith"));
   adv.push(textField("Self-hosted SCM override (optional)", "BRIGHT_SCM_PLATFORM for GitHub Enterprise / self-managed GitLab.", S.scmOverride, (v) => { S.scmOverride = v; }, "github | gitlab | azure-devops"));
   adv.push(textField("Bright hostname (optional)", "BRIGHT_HOSTNAME — your Bright cluster host. Blank = app.brightsec.com. Set for EU / dedicated / self-hosted.", S.brightHostname, (v) => { S.brightHostname = v; }, "eu.brightsec.com"));
