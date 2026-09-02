@@ -92,6 +92,7 @@
       sarifLanguage: "javascript",
       sarifPath: "",
       debug: false,
+      dumpTurns: false,
       scmOverride: "",
       brightHostname: "",
       timeoutMinutes: "60",
@@ -286,6 +287,24 @@
     return errors;
   }
 
+  // Where each platform parks the raw LLM turn dumps while the agent runs.
+  //
+  // This MUST be outside the repository checkout. `BRIGHT_DUMP_DIR` defaults to
+  // `<cwd>/.tmp`, and cwd is the repo the agent scans and commits fixes from, so
+  // the default would drop multi-MB dumps into the working tree — and into the
+  // fix PR. GitHub and Azure have proper temp-dir expressions; the shell-driven
+  // platforms use a plain absolute path so no interpolation is needed (a Groovy
+  // single-quoted string would not expand `${WORKSPACE_TMP}` anyway).
+  const TURN_DUMP_DIRS = {
+    github: "${{ runner.temp }}/bright-agent-turn-dumps",
+    azure: "$(Agent.TempDirectory)/bright-agent-turn-dumps",
+  };
+  const TURN_DUMP_DIR_DEFAULT = "/tmp/bright-agent-turn-dumps";
+
+  function turnDumpDir(s) {
+    return TURN_DUMP_DIRS[s.platform] || TURN_DUMP_DIR_DEFAULT;
+  }
+
   /** Extra scan knobs shared across platforms (same env var names everywhere). */
   function scanKnobs(s) {
     const out = [];
@@ -302,7 +321,28 @@
     // for EU/dedicated/self-hosted clusters. Non-secret, so baked into the file.
     if ((s.brightHostname || "").trim()) out.push({ k: "BRIGHT_HOSTNAME", v: s.brightHostname.trim() });
     if (s.debug) out.push({ k: "BRIGHT_DEBUG", v: "1" });
+    // Turn dumping is its own switch, independent of verbose logging: the run
+    // log records what the agent did, while only these dumps record *why* the
+    // model decided it (wrong tests selected, endpoint never scanned, auth
+    // ended up wrong). It is also far heavier than a log, so it should not ride
+    // along with console mirroring.
+    if (s.dumpTurns) {
+      out.push({ k: "BRIGHT_DUMP_TURNS", v: "1" });
+      out.push({ k: "BRIGHT_DUMP_DIR", v: turnDumpDir(s) });
+    }
     return out;
+  }
+
+  /**
+   * Does the workflow need artifact-collection scaffolding at all?
+   *
+   * Several platforms wrap collection in shared syntax — GitLab/Bitbucket have a
+   * single `after(_)script` + `artifacts` block, Jenkins a single
+   * `post { always { … } }` — so the wrapper is emitted when *either* switch is
+   * on, and the individual paths inside it are gated separately.
+   */
+  function collectsArtifacts(s) {
+    return Boolean(s.debug || s.dumpTurns);
   }
 
   function yamlScalar(v) {
@@ -571,6 +611,16 @@
       L.push(`          path: ~/.bright-agent/logs/`);
       L.push(`          if-no-files-found: ignore`);
     }
+    if (s.dumpTurns) {
+      L.push(``);
+      L.push(`      - name: Upload Bright Agent LLM turn dumps`);
+      L.push(`        if: always()`);
+      L.push(`        uses: actions/upload-artifact@v4`);
+      L.push(`        with:`);
+      L.push(`          name: bright-agent-turn-dumps`);
+      L.push(`          path: ${turnDumpDir(s)}/`);
+      L.push(`          if-no-files-found: ignore`);
+    }
     if (s.tokenMode === "builtin") {
       L.push(``);
       L.push(`# NOTE: commits/PRs made with GITHUB_TOKEN don't trigger your other workflows.`);
@@ -630,19 +680,28 @@
     scanKnobs(s).forEach(({ k, v }) => L.push(`      export ${k}=${shellQuote(v)}`));
     L.push(`      export BRIGHT_CI_TIMEOUT_MINUTES=${shellQuote(s.timeoutMinutes)}`);
     L.push(`      "$tmp/$ASSET"`);
-    if (s.debug) {
-      // GitLab only collects artifacts from inside $CI_PROJECT_DIR, and the run
-      // log lives in ~/.bright-agent/logs. Copy it into the project dir in
-      // after_script (runs even if the job fails) then upload it.
+    if (collectsArtifacts(s)) {
+      // GitLab only collects artifacts from inside $CI_PROJECT_DIR, while the
+      // run log lives in ~/.bright-agent/logs and the turn dumps in a temp dir.
+      // Copy whatever was requested into the project dir in after_script (runs
+      // even if the job fails), then upload it. One `artifacts:` block per job,
+      // so both switches share it.
       L.push(`  after_script:`);
-      L.push(`    - mkdir -p "$CI_PROJECT_DIR/bright-agent-logs"`);
-      L.push(`    - cp -a ~/.bright-agent/logs/. "$CI_PROJECT_DIR/bright-agent-logs/" 2>/dev/null || true`);
+      if (s.debug) {
+        L.push(`    - mkdir -p "$CI_PROJECT_DIR/bright-agent-logs"`);
+        L.push(`    - cp -a ~/.bright-agent/logs/. "$CI_PROJECT_DIR/bright-agent-logs/" 2>/dev/null || true`);
+      }
+      if (s.dumpTurns) {
+        L.push(`    - mkdir -p "$CI_PROJECT_DIR/bright-agent-turn-dumps"`);
+        L.push(`    - cp -a ${turnDumpDir(s)}/. "$CI_PROJECT_DIR/bright-agent-turn-dumps/" 2>/dev/null || true`);
+      }
       L.push(`  artifacts:`);
-      L.push(`    name: bright-agent-logs`);
+      L.push(`    name: ${s.debug ? "bright-agent-logs" : "bright-agent-turn-dumps"}`);
       L.push(`    when: always`);
       L.push(`    expire_in: 1 week`);
       L.push(`    paths:`);
-      L.push(`      - bright-agent-logs/`);
+      if (s.debug) L.push(`      - bright-agent-logs/`);
+      if (s.dumpTurns) L.push(`      - bright-agent-turn-dumps/`);
     }
     return L.join("\n");
   }
@@ -734,6 +793,21 @@
       L.push(`      targetPath: $(Build.ArtifactStagingDirectory)/bright-agent-logs`);
       L.push(`      artifact: bright-agent-logs`);
     }
+    if (s.dumpTurns) {
+      L.push(``);
+      L.push(`  - bash: |`);
+      L.push(`      mkdir -p "$(Build.ArtifactStagingDirectory)/bright-agent-turn-dumps"`);
+      L.push(`      cp -a "${turnDumpDir(s)}/." "$(Build.ArtifactStagingDirectory)/bright-agent-turn-dumps/" 2>/dev/null || true`);
+      L.push(`    displayName: Collect Bright Agent LLM turn dumps`);
+      L.push(`    condition: always()`);
+      L.push(``);
+      L.push(`  - task: PublishPipelineArtifact@1`);
+      L.push(`    displayName: Upload Bright Agent LLM turn dumps`);
+      L.push(`    condition: always()`);
+      L.push(`    inputs:`);
+      L.push(`      targetPath: $(Build.ArtifactStagingDirectory)/bright-agent-turn-dumps`);
+      L.push(`      artifact: bright-agent-turn-dumps`);
+    }
     return L.join("\n");
   }
 
@@ -771,14 +845,22 @@
     scanKnobs(s).forEach(({ k, v }) => L.push(`            export ${k}=${shellQuote(v)}`));
     L.push(`            export BRIGHT_CI_TIMEOUT_MINUTES=${shellQuote(s.timeoutMinutes)}`);
     L.push(`            "/tmp/$ASSET"`);
-    if (s.debug) {
+    if (collectsArtifacts(s)) {
       // Bitbucket only uploads artifacts from inside $BITBUCKET_CLONE_DIR, so
-      // copy the run log there in after-script (runs even when the step fails).
+      // copy what was requested there in after-script (runs even when the step
+      // fails). One `artifacts:` list per step, shared by both switches.
       L.push(`        after-script:`);
-      L.push(`          - mkdir -p "$BITBUCKET_CLONE_DIR/bright-agent-logs"`);
-      L.push(`          - cp -a ~/.bright-agent/logs/. "$BITBUCKET_CLONE_DIR/bright-agent-logs/" 2>/dev/null || true`);
+      if (s.debug) {
+        L.push(`          - mkdir -p "$BITBUCKET_CLONE_DIR/bright-agent-logs"`);
+        L.push(`          - cp -a ~/.bright-agent/logs/. "$BITBUCKET_CLONE_DIR/bright-agent-logs/" 2>/dev/null || true`);
+      }
+      if (s.dumpTurns) {
+        L.push(`          - mkdir -p "$BITBUCKET_CLONE_DIR/bright-agent-turn-dumps"`);
+        L.push(`          - cp -a ${turnDumpDir(s)}/. "$BITBUCKET_CLONE_DIR/bright-agent-turn-dumps/" 2>/dev/null || true`);
+      }
       L.push(`        artifacts:`);
-      L.push(`          - bright-agent-logs/**`);
+      if (s.debug) L.push(`          - bright-agent-logs/**`);
+      if (s.dumpTurns) L.push(`          - bright-agent-turn-dumps/**`);
     }
     L.push(`  services:`);
     L.push(`    docker:`);
@@ -846,6 +928,12 @@
       L.push(`          path: /tmp/bright-agent-logs`);
       L.push(`          destination: bright-agent-logs`);
     }
+    if (s.dumpTurns) {
+      // The dumps already live under /tmp, so no staging copy is needed.
+      L.push(`      - store_artifacts:`);
+      L.push(`          path: ${turnDumpDir(s)}`);
+      L.push(`          destination: bright-agent-turn-dumps`);
+    }
     L.push(``);
     L.push(`workflows:`);
     if (t.schedule) {
@@ -905,17 +993,24 @@
     L.push(`      steps { sh 'LOCAL_REPO_PATH="\${WORKSPACE}" "\${WORKSPACE_TMP}/\${ASSET}"' }`);
     L.push(`    }`);
     L.push(`  }`);
-    if (s.debug) {
+    if (collectsArtifacts(s)) {
       // archiveArtifacts can only see files under the workspace, so copy the
-      // run log (~/.bright-agent/logs) in first. `post { always }` runs even
-      // when a stage fails; allowEmptyArchive avoids failing on no logs.
+      // requested diagnostics in first. `post { always }` runs even when a stage
+      // fails; allowEmptyArchive avoids failing when there is nothing to collect.
       L.push(`  post {`);
       L.push(`    always {`);
       L.push(`      sh '''`);
-      L.push(`        mkdir -p "\${WORKSPACE}/bright-agent-logs"`);
-      L.push(`        cp -a ~/.bright-agent/logs/. "\${WORKSPACE}/bright-agent-logs/" 2>/dev/null || true`);
+      if (s.debug) {
+        L.push(`        mkdir -p "\${WORKSPACE}/bright-agent-logs"`);
+        L.push(`        cp -a ~/.bright-agent/logs/. "\${WORKSPACE}/bright-agent-logs/" 2>/dev/null || true`);
+      }
+      if (s.dumpTurns) {
+        L.push(`        mkdir -p "\${WORKSPACE}/bright-agent-turn-dumps"`);
+        L.push(`        cp -a ${turnDumpDir(s)}/. "\${WORKSPACE}/bright-agent-turn-dumps/" 2>/dev/null || true`);
+      }
       L.push(`      '''`);
-      L.push(`      archiveArtifacts artifacts: 'bright-agent-logs/**', allowEmptyArchive: true`);
+      if (s.debug) L.push(`      archiveArtifacts artifacts: 'bright-agent-logs/**', allowEmptyArchive: true`);
+      if (s.dumpTurns) L.push(`      archiveArtifacts artifacts: 'bright-agent-turn-dumps/**', allowEmptyArchive: true`);
       L.push(`    }`);
       L.push(`  }`);
     }
@@ -1097,7 +1192,16 @@
     h += docSection("Runner prerequisites",
       `<p>The runner must have <b>Docker</b>, <b>Docker Compose</b>, <b>Git</b>, <code>curl</code> and <code>sha256sum</code>, and be able to reach the started app on <code>localhost</code>. A full scan builds and runs your whole app, so schedule baselines nightly rather than on every push.</p>`);
     if (s.debug) {
-      h += `<div class="callout info"><span class="h">Logs are uploaded as an artifact</span>Verbose logging is on, so the full run log (<code>~/.bright-agent/logs/</code>) is uploaded as the <code>bright-agent-logs</code> CI artifact — kept even if the run fails. Secrets are redacted from the log. ${s.platform === "gitlab" || s.platform === "bitbucket" || s.platform === "jenkins" ? "The workflow copies it into the build workspace first, since this platform only collects artifacts from there." : ""}</div>`;
+      const copiesIntoWorkspace = s.platform === "gitlab" || s.platform === "bitbucket" || s.platform === "jenkins";
+      h += `<div class="callout info"><span class="h">Logs are uploaded as an artifact</span>Verbose logging is on, so the full run log (<code>~/.bright-agent/logs/</code>) is uploaded as the <code>bright-agent-logs</code> CI artifact — kept even if the run fails. Secrets are redacted from the log. ${copiesIntoWorkspace ? "The workflow copies it into the build workspace first, since this platform only collects artifacts from there." : ""}</div>`;
+    }
+    if (s.dumpTurns) {
+      const copiesIntoWorkspace = s.platform === "gitlab" || s.platform === "bitbucket" || s.platform === "jenkins";
+      h += `<div class="callout info"><span class="h">LLM turn dumps are uploaded as an artifact</span>`
+        + `<code>BRIGHT_DUMP_TURNS=1</code> is set with <code>BRIGHT_DUMP_DIR=${esc(turnDumpDir(s))}</code>, so every raw model request/response is saved and uploaded as the <code>bright-agent-turn-dumps</code> artifact — kept even if the run fails. `
+        + `The run log shows <i>what</i> the agent did; the dumps show <i>why</i> the model decided it, so attach them to any support ticket about test selection, endpoint discovery or auth. `
+        + `${copiesIntoWorkspace ? "The workflow copies them into the build workspace first, since this platform only collects artifacts from there. " : ""}`
+        + `Two caveats: the dumps are large (millions of tokens on a real repo), and they contain the prompts — which include snippets of your source code — and are <b>not</b> secret-redacted the way the run log is. Leave this off for routine runs. The dump directory sits outside the checkout, so it never reaches a fix PR.</div>`;
     }
     return h;
   }
@@ -1504,7 +1608,7 @@
     esc, dlBase, activeTriggers, workflowBehavior, usesPR, usesSteering,
     needsRepoToken, wantsAwsOidc, usesBedrockOidc, bedrockInferenceUrl,
     effectiveInferenceUrl, effectiveAiModel, bedrockModelIds, bedrockModelFamily, configurationErrors,
-    scanKnobs, yamlScalar, shellQuote, groovyQuote, inferenceEnvLines,
+    scanKnobs, turnDumpDir, yamlScalar, shellQuote, groovyQuote, inferenceEnvLines,
     // generators
     generateGitHub, generateGitLab, generateAzure, generateBitbucket, generateCircle, generateJenkins,
     generateYaml, fileName, codeLang,

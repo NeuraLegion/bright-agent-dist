@@ -641,6 +641,134 @@ test("doc: debug adds the log-artifact callout", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Verbose logging → LLM turn dumps (BRIGHT_DUMP_TURNS) artifact, per platform
+//
+// The run log alone cannot answer "why did the model pick these tests / miss
+// this endpoint / get auth wrong" — only the raw turns can, so verbose mode has
+// to collect them or a support round-trip is wasted asking for a re-run.
+// ---------------------------------------------------------------------------
+test("dumpTurns off: no platform enables turn dumps", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const y = G.generateYaml(st({ platform, triggers: only(...G.PLATFORMS[platform].triggers), dumpTurns: false }));
+    assert.ok(!/BRIGHT_DUMP_TURNS/.test(y), `${platform} does not dump turns when the switch is off`);
+    assert.ok(!/BRIGHT_DUMP_DIR/.test(y), `${platform} sets no dump dir when the switch is off`);
+    assert.ok(!/bright-agent-turn-dumps/.test(y), `${platform} has no turn-dump artifact when the switch is off`);
+  }
+});
+test("dumpTurns on: every platform sets BRIGHT_DUMP_TURNS + BRIGHT_DUMP_DIR and collects the dumps", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const s = st({ platform, triggers: only(...G.PLATFORMS[platform].triggers), dumpTurns: true });
+    const y = G.generateYaml(s);
+    assert.match(y, /BRIGHT_DUMP_TURNS/, `${platform} enables turn dumping`);
+    assert.match(y, /BRIGHT_DUMP_DIR/, `${platform} pins the dump dir`);
+    assert.ok(y.includes(G.turnDumpDir(s)), `${platform} uses its own dump dir literal`);
+    assert.match(y, /bright-agent-turn-dumps/, `${platform} names the turn-dump artifact`);
+  }
+});
+
+// The two switches are independent: turn dumps are much heavier than a log, so
+// asking for verbose console output must not silently enable them, and asking
+// for dumps must not require verbose logging.
+test("the two diagnostics switches are independent", () => {
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const triggers = only(...G.PLATFORMS[platform].triggers);
+
+    const debugOnly = G.generateYaml(st({ platform, triggers, debug: true, dumpTurns: false }));
+    assert.match(debugOnly, /BRIGHT_DEBUG/, `${platform} debug-only sets BRIGHT_DEBUG`);
+    assert.ok(!/BRIGHT_DUMP_TURNS/.test(debugOnly), `${platform} debug-only must not dump turns`);
+    assert.ok(!/bright-agent-turn-dumps/.test(debugOnly), `${platform} debug-only has no dump artifact`);
+    assert.match(debugOnly, /bright-agent-logs/, `${platform} debug-only still collects the log`);
+
+    const dumpsOnly = G.generateYaml(st({ platform, triggers, debug: false, dumpTurns: true }));
+    assert.ok(!/BRIGHT_DEBUG/.test(dumpsOnly), `${platform} dumps-only must not set BRIGHT_DEBUG`);
+    assert.ok(!/bright-agent-logs/.test(dumpsOnly), `${platform} dumps-only must not collect the log`);
+    assert.match(dumpsOnly, /bright-agent-turn-dumps/, `${platform} dumps-only collects the dumps`);
+
+    const both = G.generateYaml(st({ platform, triggers, debug: true, dumpTurns: true }));
+    assert.match(both, /bright-agent-logs/, `${platform} both collects the log`);
+    assert.match(both, /bright-agent-turn-dumps/, `${platform} both collects the dumps`);
+  }
+});
+test("dumps-only still emits the platform's artifact scaffolding", () => {
+  // GitLab/Bitbucket/Jenkins wrap collection in shared syntax that used to be
+  // gated on `debug`; with dumps alone the wrapper must still be emitted, or the
+  // artifact is silently dropped.
+  const gl = G.generateGitLab(st({ platform: "gitlab", debug: false, dumpTurns: true }));
+  assert.match(gl, /after_script:/);
+  assert.match(gl, /artifacts:/);
+  assert.match(gl, /name: bright-agent-turn-dumps/);
+  assert.match(gl, /when: always/);
+
+  const bb = G.generateBitbucket(st({ platform: "bitbucket", debug: false, dumpTurns: true }));
+  assert.match(bb, /after-script:/);
+  assert.match(bb, /artifacts:/);
+  assert.match(bb, /- bright-agent-turn-dumps\/\*\*/);
+
+  const jk = G.generateJenkins(st({ platform: "jenkins", debug: false, dumpTurns: true }));
+  assert.match(jk, /post \{/);
+  assert.match(jk, /always \{/);
+  assert.match(jk, /archiveArtifacts artifacts: 'bright-agent-turn-dumps\/\*\*', allowEmptyArchive: true/);
+});
+test("turn dumps never land inside the repo checkout (they would reach the fix PR)", () => {
+  // BRIGHT_DUMP_DIR defaults to <cwd>/.tmp and cwd is the scanned repo, so the
+  // generator must always override it with a path outside the working tree.
+  const outside = { github: /^\$\{\{ runner\.temp \}\}\//, azure: /^\$\(Agent\.TempDirectory\)\//, };
+  for (const platform of Object.keys(G.PLATFORMS)) {
+    const dir = G.turnDumpDir(st({ platform }));
+    const rx = outside[platform] || /^\/tmp\//;
+    assert.match(dir, rx, `${platform} dump dir is outside the checkout`);
+    for (const inRepo of ["$CI_PROJECT_DIR", "$BITBUCKET_CLONE_DIR", "${WORKSPACE}", "github.workspace", "Build.SourcesDirectory"]) {
+      assert.ok(!dir.includes(inRepo), `${platform} dump dir must not sit under ${inRepo}`);
+    }
+  }
+});
+test("github: turn dumps upload as their own artifact, always, tolerating absence", () => {
+  const y = G.generateGitHub(st({ debug: true, dumpTurns: true }));
+  assert.match(y, /name: bright-agent-turn-dumps/);
+  assert.match(y, /path: \$\{\{ runner\.temp \}\}\/bright-agent-turn-dumps\//);
+  // both artifacts present, each guarded by if: always()
+  assert.equal((y.match(/uses: actions\/upload-artifact@v4/g) || []).length, 2);
+  assert.equal((y.match(/if-no-files-found: ignore/g) || []).length, 2);
+});
+test("gitlab: turn dumps are copied into CI_PROJECT_DIR and added to artifact paths", () => {
+  const y = G.generateGitLab(st({ platform: "gitlab", debug: true, dumpTurns: true }));
+  assert.match(y, /cp -a \/tmp\/bright-agent-turn-dumps\/\. "\$CI_PROJECT_DIR\/bright-agent-turn-dumps\/"/);
+  assert.match(y, /- bright-agent-turn-dumps\//);
+});
+test("azure: turn dumps get their own collect + publish pair, always()", () => {
+  const y = G.generateAzure(st({ platform: "azure", debug: true, dumpTurns: true }));
+  assert.match(y, /artifact: bright-agent-turn-dumps/);
+  assert.match(y, /\$\(Agent\.TempDirectory\)\/bright-agent-turn-dumps/);
+  assert.equal((y.match(/PublishPipelineArtifact@1/g) || []).length, 2);
+});
+test("bitbucket: turn dumps are copied to the clone dir and globbed as artifacts", () => {
+  const y = G.generateBitbucket(st({ platform: "bitbucket", debug: true, dumpTurns: true }));
+  assert.match(y, /\$BITBUCKET_CLONE_DIR\/bright-agent-turn-dumps/);
+  assert.match(y, /- bright-agent-turn-dumps\/\*\*/);
+});
+test("circleci: turn dumps are stored from the temp dir under their own destination", () => {
+  const y = G.generateCircle(st({ platform: "circleci", debug: true, dumpTurns: true }));
+  assert.match(y, /path: \/tmp\/bright-agent-turn-dumps/);
+  assert.match(y, /destination: bright-agent-turn-dumps/);
+  assert.equal((y.match(/store_artifacts:/g) || []).length, 2);
+});
+test("jenkins: turn dumps are copied into the workspace and archived", () => {
+  const y = G.generateJenkins(st({ platform: "jenkins", debug: true, dumpTurns: true }));
+  // A Groovy single-quoted env value would not expand ${WORKSPACE_TMP}, so the
+  // dump dir must be a literal absolute path.
+  assert.match(y, /BRIGHT_DUMP_DIR = '\/tmp\/bright-agent-turn-dumps'/);
+  assert.match(y, /archiveArtifacts artifacts: 'bright-agent-turn-dumps\/\*\*', allowEmptyArchive: true/);
+});
+test("doc: dumpTurns explains the turn-dump artifact and its source-code caveat", () => {
+  const on = G.generateDoc(st({ dumpTurns: true }));
+  assert.match(on, /LLM turn dumps are uploaded as an artifact/);
+  assert.match(on, /BRIGHT_DUMP_TURNS=1/);
+  assert.match(on, /bright-agent-turn-dumps/);
+  assert.match(on, /source code/);
+  assert.ok(!/LLM turn dumps are uploaded/.test(G.generateDoc(st({ dumpTurns: false }))));
+});
+
+// ---------------------------------------------------------------------------
 // BRIGHT_HOSTNAME (optional cluster override, baked into the file)
 // ---------------------------------------------------------------------------
 test("no platform emits BRIGHT_HOSTNAME when the field is blank", () => {
