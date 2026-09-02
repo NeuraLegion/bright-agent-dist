@@ -656,6 +656,7 @@ function renderForm() {
   adv.push(textField("Bright hostname (optional)", "BRIGHT_HOSTNAME — your Bright cluster host. Blank = app.brightsec.com. Set for EU / dedicated / self-hosted.", S.brightHostname, (v) => { S.brightHostname = v; }, "eu.brightsec.com"));
   if (S.platform !== "github") adv.push(textField("CI timeout minutes", "BRIGHT_CI_TIMEOUT_MINUTES — checkpoint before the runner is killed.", S.timeoutMinutes, (v) => { S.timeoutMinutes = v; }, "60"));
   adv.push(el("div", { class: "field" }, [toggleRow("Verbose logging", "Set BRIGHT_DEBUG=1 to mirror the full log to the console, and upload the run log as a CI artifact (bright-agent-logs).", S.debug, (v) => { S.debug = v; })]));
+  adv.push(el("div", { class: "field" }, [toggleRow("Collect LLM turn dumps", "Set BRIGHT_DUMP_TURNS=1 and upload every raw model request/response as a CI artifact (bright-agent-turn-dumps). The run log shows what the agent did; these show why the model chose the tests, endpoints and auth it did — attach them to support tickets. Large, and they contain prompts with source snippets, so leave off for routine runs.", S.dumpTurns, (v) => { S.dumpTurns = v; })]));
   root.appendChild(card("Advanced", "optional", adv));
 }
 
