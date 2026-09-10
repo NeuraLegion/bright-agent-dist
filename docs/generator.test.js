@@ -965,8 +965,19 @@ test("diagram: the cloud never connects to the target app", () => {
       const m = G.diagramModel({ ...G.defaultState(), provider, runMode });
       assert.equal(edgeBetween(m, "cloud", "target"), undefined,
         `cloud must not reach the target (${provider}/${runMode})`);
-      assert.equal(m.edges.some((e) => e.to === "target" && e.from !== "agent"), false,
-        "only the agent drives traffic at the target");
+      if (runMode === "fuzzing") {
+        // Fuzzing is the one mode where something other than the agent drives
+        // the target: the FUZZER spawns and feeds the harness. That is correct
+        // and must stay INSIDE the runner (no crossing edge touches the target).
+        m.edges.forEach((e) => {
+          if (e.to === "target" || e.from === "target") {
+            assert.ok(!e.crosses, `target edge ${e.from}->${e.to} must stay inside the runner`);
+          }
+        });
+      } else {
+        assert.equal(m.edges.some((e) => e.to === "target" && e.from !== "agent"), false,
+          "only the agent drives traffic at the target");
+      }
     }
   }
 });
@@ -1046,6 +1057,17 @@ test("diagram: fuzzing is a self-contained flow with no scan and no write-back t
   assert.match(target.t, /harness/i);
   assert.match(target.d, /wrapped functions/);
   assert.ok(m.nodes.some((n) => n.id === "fuzzer"), "the fuzzer node is shown");
+
+  // The FUZZER drives the harness, not the agent: the agent only builds them.
+  assert.ok(edgeBetween(m, "fuzzer", "target"), "the fuzzer drives the harness");
+  assert.equal(edgeBetween(m, "fuzzer", "target").label, "fuzz inputs");
+  assert.ok(edgeBetween(m, "agent", "target"), "the agent builds the harness");
+  assert.match(edgeBetween(m, "agent", "target").label, /build/i);
+  assert.match(edgeBetween(m, "agent", "fuzzer").label, /build/i);
+  // Faults come back from the fuzzer to the agent for triage; the harness feeds
+  // the fuzzer, never the agent directly.
+  assert.ok(edgeBetween(m, "fuzzer", "agent"), "faults flow fuzzer -> agent");
+  assert.equal(edgeBetween(m, "target", "agent"), undefined, "the harness does not report to the agent directly");
 
   // No outbound scan tunnel to the cloud, and nothing crosses the boundary to a
   // running app: the fuzz loop is entirely inside the runner.

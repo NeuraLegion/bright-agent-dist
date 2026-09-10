@@ -1389,7 +1389,7 @@
         t: "Repo checkout", d: s.scope === "full" ? "full repo" : (s.scope === "changed" ? "changed files" : "diff or full") },
       { id: "agent", zone: "in", x: 236, y: 116, w: 166, h: 52, kind: "agent",
         t: "Bright Agent", d: "build · discover · fix", d2: "AI-driven" },
-      { id: "target", zone: "in", x: 236, y: 200, w: 166, h: 52, kind: "app",
+      { id: "target", zone: "in", x: 236, y: fuzzing ? 284 : 200, w: 166, h: 52, kind: "app",
         t: (harness || fuzzing) ? "Function harness" : "Target app", d: (harness || fuzzing) ? "wrapped functions" : "Docker Compose" },
     ];
 
@@ -1402,12 +1402,13 @@
         t: "Bright DAST engine", d: "attacks · findings · retest", d2: brightHost(s) });
     }
 
-    // Fuzzing drives the evolutionary fuzzer against the wrapped functions
-    // entirely inside the runner, no app boot, no scan, no traffic leaving the
-    // network. The triage of faults into the PR is folded into the agent.
+    // Fuzzing is self-contained: the agent BUILDS the harness and the fuzzer,
+    // then the fuzzer drives the harness (spawns it, feeds it inputs, reads its
+    // coverage and crashes). So the fuzzer sits between the agent and the
+    // harness. No app boot, no scan, no traffic leaving the network.
     if (fuzzing) {
-      nodes.push({ id: "fuzzer", zone: "in", x: 236, y: 284, w: 166, h: 52, kind: "sarif",
-        t: "Evolutionary fuzzer", d: "crashes · hangs · memory" });
+      nodes.push({ id: "fuzzer", zone: "in", x: 236, y: 200, w: 166, h: 52, kind: "sarif",
+        t: "Evolutionary fuzzer", d: "drives the harness" });
     }
 
     // Validation mode has no fix loop, so nothing is written back and the SCM
@@ -1451,12 +1452,15 @@
     ];
 
     if (fuzzing) {
-      // Self-contained: the agent wraps functions, the fuzzer drives them, and
-      // the faults come back to the agent for triage into the PR. No traffic
-      // leaves the runner and there is no Bright scan.
-      edges.push({ from: "agent", to: "target", kind: "control", label: "wrap functions" });
-      edges.push({ from: "target", to: "fuzzer", kind: "attack", label: "fuzz inputs" });
-      edges.push({ from: "fuzzer", to: "agent", kind: "data", label: "faults" });
+      // The agent BUILDS the harness and the fuzzer (control), then steps out of
+      // the hot loop: the FUZZER drives the harness, feeding it inputs and reading
+      // back coverage and crashes. Faults return to the agent for triage into the
+      // PR. No traffic leaves the runner and there is no Bright scan.
+      edges.push({ from: "agent", to: "fuzzer", kind: "control", label: "build · launch" });
+      edges.push({ from: "agent", to: "target", kind: "control", label: "build harness" });
+      edges.push({ from: "fuzzer", to: "target", kind: "attack", label: "fuzz inputs" });
+      edges.push({ from: "target", to: "fuzzer", kind: "data", label: "coverage · crashes" });
+      edges.push({ from: "fuzzer", to: "agent", kind: "data", label: "faults", dy: -14 });
     } else {
       edges.push({ from: "agent", to: "target", kind: "attack",
         label: "Bright test traffic" });
