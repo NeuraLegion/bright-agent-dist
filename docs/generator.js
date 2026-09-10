@@ -38,6 +38,7 @@
     dynamic:    { t: "Dynamic (strict)", d: "Full startup only — fail the run if the app can't boot. No harness fallback." },
     function:   { t: "Function harness", d: "Skip full startup; wrap security-critical functions in a lightweight HTTP harness." },
     validation: { t: "SAST validation", d: "Confirm/dismiss SARIF findings against the live app. No fix loop." },
+    fuzzing:    { t: "Fuzzing", d: "Drive the evolutionary fuzzer against per-function harnesses to find crashes, hangs, and memory bugs. No app startup or Bright scan." },
   };
 
   const SCOPES = {
@@ -196,7 +197,7 @@
   /** Extra scan knobs shared across platforms (same env var names everywhere). */
   function scanKnobs(s) {
     const out = [];
-    if (s.scope !== "auto" && s.runMode !== "validation") out.push({ k: "SCAN_SCOPE", v: s.scope });
+    if (s.scope !== "auto" && s.runMode !== "validation" && s.runMode !== "fuzzing") out.push({ k: "SCAN_SCOPE", v: s.scope });
     if (s.runMode !== "full") out.push({ k: "RUN_MODE", v: s.runMode });
     if (s.runMode === "validation") out.push({ k: "SARIF_PATH", v: s.sarifPath || "REPLACE_WITH_PATH_TO.sarif" });
     // AI_MODEL is baked into the file: use the explicit value, else the
@@ -823,7 +824,7 @@
     const trg = activeTriggers(s).map((t) => (t === "pr" ? P.prWord.toLowerCase() : t)).join(", ");
     const parts = [`On <b>${esc(P.name)}</b>, runs on <b>${esc(trg || "—")}</b>`];
     parts.push(`in <b>${esc(RUN_MODES[s.runMode].t.replace(/ \(.*\)/, "").toLowerCase())}</b> mode`);
-    if (s.runMode !== "validation") parts.push(`with <b>${esc(SCOPES[s.scope].t.replace(/ \(.*\)/, "").toLowerCase())}</b> scope`);
+    if (s.runMode !== "validation" && s.runMode !== "fuzzing") parts.push(`with <b>${esc(SCOPES[s.scope].t.replace(/ \(.*\)/, "").toLowerCase())}</b> scope`);
     if (usesBedrockOidc(s)) parts.push(`using <b>AWS Bedrock IAM/OIDC</b>`);
     return parts.join(", ") + ".";
   }
@@ -922,6 +923,10 @@
     return `<p>Produce a SARIF file in an earlier job/stage (CodeQL, Semgrep, Snyk, …), write it <b>outside the checkout</b>, and point <code>SARIF_PATH</code> at it. STAR confirms or dismisses each finding against the running app — no fix loop.</p>`;
   }
 
+  function fuzzingDoc(s) {
+    return `<p>STAR wraps security-critical functions in per-function harnesses and drives an evolutionary fuzzer against them to surface crashes, hangs, and memory bugs. The run is self-contained: no app startup, no Bright cloud scan, no repeater, and no scan scope. Faults the fuzzer finds are triaged into the PR.</p>`;
+  }
+
   function generateDoc(s) {
     const P = PLATFORMS[s.platform];
     let h = "";
@@ -955,6 +960,7 @@
     if (extra) h += docSection("4 · Platform setup", extra);
     if (usesSteering(s) && !P.nativeSteering) h += docSection("5 · Wire /bright-agent comment steering", steeringDoc(s));
     if (s.runMode === "validation") h += docSection("SAST validation", validationDoc(s));
+    if (s.runMode === "fuzzing") h += docSection("Fuzzing", fuzzingDoc(s));
     h += docSection("Runner prerequisites",
       `<p>The runner must have <b>Docker</b>, <b>Docker Compose</b>, <b>Git</b>, <code>curl</code> and <code>sha256sum</code>, and be able to reach the started app on <code>localhost</code>. A full scan builds and runs your whole app, so schedule baselines nightly rather than on every push.</p>`);
     if (s.debug) {
@@ -1119,6 +1125,7 @@
     const selfHostedLlm = s.provider === "ollama";
     const validation = s.runMode === "validation";
     const harness = s.runMode === "function";
+    const fuzzing = s.runMode === "fuzzing";
     const trig = activeTriggers(s);
 
     // Abbreviated so the text fits the node box; the summary line above the
@@ -1140,15 +1147,25 @@
       { id: "agent", zone: "in", x: 236, y: 116, w: 166, h: 52, kind: "agent",
         t: "Bright Agent", d: "build · discover · fix", d2: "AI-driven" },
       { id: "target", zone: "in", x: 236, y: 200, w: 166, h: 52, kind: "app",
-        t: harness ? "Function harness" : "Target app", d: harness ? "wrapped functions" : "Docker Compose" },
-
-      // --- outside
-      { id: "cloud", zone: "out", x: 610, y: 184, w: 190, h: 66, kind: "cloud",
-        // brightHost(s) resolves BRIGHT_HOSTNAME, so a custom cluster (EU,
-        // dedicated) is shown here rather than the default. The engine is always
-        // outside the runner, so its zone never changes.
-        t: "Bright DAST engine", d: "attacks · findings · retest", d2: brightHost(s) },
+        t: (harness || fuzzing) ? "Function harness" : "Target app", d: (harness || fuzzing) ? "wrapped functions" : "Docker Compose" },
     ];
+
+    // Fuzzing is self-contained: no Bright cloud scan, so the DAST engine node
+    // is omitted. The other run modes always show the engine (always outside
+    // the runner, so its zone never changes). brightHost(s) resolves
+    // BRIGHT_HOSTNAME, so a custom cluster (EU, dedicated) is shown here.
+    if (!fuzzing) {
+      nodes.push({ id: "cloud", zone: "out", x: 610, y: 184, w: 190, h: 66, kind: "cloud",
+        t: "Bright DAST engine", d: "attacks · findings · retest", d2: brightHost(s) });
+    }
+
+    // Fuzzing drives the evolutionary fuzzer against the wrapped functions
+    // entirely inside the runner, no app boot, no scan, no traffic leaving the
+    // network. The triage of faults into the PR is folded into the agent.
+    if (fuzzing) {
+      nodes.push({ id: "fuzzer", zone: "in", x: 236, y: 284, w: 166, h: 52, kind: "sarif",
+        t: "Evolutionary fuzzer", d: "crashes · hangs · memory" });
+    }
 
     // Validation mode has no fix loop, so nothing is written back and the SCM
     // node would sit unconnected. Omit it rather than imply a link.
@@ -1188,22 +1205,33 @@
       { from: "trigger", to: "ci", kind: "control" },
       { from: "ci", to: "agent", kind: "control" },
       { from: "repo", to: "agent", kind: "data" },
-      { from: "agent", to: "target", kind: "attack",
-        label: "Bright test traffic" },
-      { from: "agent", to: "cloud", kind: "tunnel", crosses: true, lane: 500,
-        label: "outbound only · findings" },
-      { from: "agent", to: "llm", kind: "llm", crosses: !selfHostedLlm, lane: 578,
-        label: selfHostedLlm ? "inference" : "code · analysis" },
     ];
 
+    if (fuzzing) {
+      // Self-contained: the agent wraps functions, the fuzzer drives them, and
+      // the faults come back to the agent for triage into the PR. No traffic
+      // leaves the runner and there is no Bright scan.
+      edges.push({ from: "agent", to: "target", kind: "control", label: "wrap functions" });
+      edges.push({ from: "target", to: "fuzzer", kind: "attack", label: "fuzz inputs" });
+      edges.push({ from: "fuzzer", to: "agent", kind: "data", label: "faults" });
+    } else {
+      edges.push({ from: "agent", to: "target", kind: "attack",
+        label: "Bright test traffic" });
+      edges.push({ from: "agent", to: "cloud", kind: "tunnel", crosses: true, lane: 500,
+        label: "outbound only · findings" });
+    }
+    edges.push({ from: "agent", to: "llm", kind: "llm", crosses: !selfHostedLlm, lane: 578,
+      label: selfHostedLlm ? "inference" : "code · analysis" });
+
     if (validation) edges.push({ from: "sarif", to: "agent", kind: "data", label: "to confirm" });
-    // No fix loop in validation mode, so nothing is written back.
+    // No fix loop in validation mode, so nothing is written back. Fuzzing does
+    // triage faults into a PR (a write), but never against a running app.
     if (!validation) {
       edges.push({ from: "agent", to: "scm", kind: "write", crosses: true, lane: 452,
         label: needsRepoToken(s) ? "REPO_ACCESS_TOKEN" : (s.platform === "github" ? "GITHUB_TOKEN" : "System.AccessToken") });
     }
 
-    return { nodes, edges, selfHostedLlm, validation, harness };
+    return { nodes, edges, selfHostedLlm, validation, harness, fuzzing };
   }
 
   /** Node glyphs, drawn inline. No third-party icon requests. */
@@ -1283,6 +1311,7 @@
       ? `That inference runs on ${providerLabel(s)} inside your network, so no code or findings reach a third-party model.`
       : `Code and findings are sent to ${providerLabel(s)} for that reasoning.`);
     if (m.validation) bits.push("Validation mode confirms SARIF findings against the live app and writes nothing back.");
+    if (m.fuzzing) bits.push("Fuzzing mode wraps security-critical functions and drives the evolutionary fuzzer against them entirely on the runner. There is no app boot and no Bright scan, and the faults it finds are triaged into the PR.");
     return bits.join(" ");
   }
 
@@ -1370,7 +1399,7 @@
     generateGitHub, generateGitLab, generateAzure, generateBitbucket, generateCircle, generateJenkins,
     generateYaml, fileName, codeLang,
     // docs
-    secretRows, summaryLine, repoAccessDoc, platformExtraDoc, steeringDoc, validationDoc, generateDoc,
+    secretRows, summaryLine, repoAccessDoc, platformExtraDoc, steeringDoc, validationDoc, fuzzingDoc, generateDoc,
     // credential validation
     brightHost, inferenceCheckPlan, modelInList, interpretModelsResponse, brightCheckUrl, brightCurl,
     // diagram

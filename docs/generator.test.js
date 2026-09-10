@@ -86,6 +86,16 @@ test("scanKnobs suppresses SCAN_SCOPE in validation mode", () => {
 test("scanKnobs emits RUN_MODE when not full", () => {
   assert.equal(G.scanKnobs(st({ runMode: "function" })).find((x) => x.k === "RUN_MODE").v, "function");
 });
+test("scanKnobs emits RUN_MODE=fuzzing in fuzzing mode", () => {
+  assert.equal(G.scanKnobs(st({ runMode: "fuzzing" })).find((x) => x.k === "RUN_MODE").v, "fuzzing");
+});
+test("scanKnobs suppresses SCAN_SCOPE in fuzzing mode (self-contained, no scan)", () => {
+  const keys = G.scanKnobs(st({ scope: "changed", runMode: "fuzzing" })).map((x) => x.k);
+  assert.ok(!keys.includes("SCAN_SCOPE"));
+  assert.ok(keys.includes("RUN_MODE"));
+  // Fuzzing has no SARIF: that stays validation-only.
+  assert.ok(!keys.includes("SARIF_PATH"));
+});
 test("scanKnobs SARIF_PATH placeholder when empty", () => {
   const v = G.scanKnobs(st({ runMode: "validation" })).find((x) => x.k === "SARIF_PATH").v;
   assert.match(v, /REPLACE_WITH_PATH/);
@@ -544,6 +554,14 @@ test("generateDoc wires steering only for non-native platforms with steering on"
 test("generateDoc shows validation guidance in validation mode", () => {
   assert.match(G.generateDoc(st({ runMode: "validation", sarifTool: "codeql", triggers: only("manual") })), /SAST validation/);
 });
+test("generateDoc shows a self-contained fuzzing section in fuzzing mode", () => {
+  const d = G.generateDoc(st({ runMode: "fuzzing", triggers: only("manual") }));
+  assert.match(d, /Fuzzing/);
+  assert.match(d, /evolutionary fuzzer/);
+  assert.match(d, /no app startup/i);
+  // No SARIF/validation guidance leaks into a fuzzing doc.
+  assert.ok(!/SAST validation/.test(d));
+});
 test("generateDoc always lists INFERENCE_TOKEN and never OPENAI_API_KEY", () => {
   const d = G.generateDoc(st({ provider: "openai" }));
   assert.match(d, /INFERENCE_TOKEN/);
@@ -568,6 +586,11 @@ test("summaryLine mentions platform, trigger, mode", () => {
 test("summaryLine omits scope wording in validation mode", () => {
   const line = G.summaryLine(st({ runMode: "validation", triggers: only("manual") }));
   assert.ok(!/scope/.test(line));
+});
+test("summaryLine omits scope wording in fuzzing mode", () => {
+  const line = G.summaryLine(st({ runMode: "fuzzing", triggers: only("manual") }));
+  assert.ok(!/scope/.test(line));
+  assert.match(line, /fuzzing/);
 });
 
 // ---------------------------------------------------------------------------
@@ -655,6 +678,44 @@ test("diagram: the harness replaces the booted app", () => {
   assert.match(target.d, /wrapped functions/);
   assert.equal(edgeBetween(h, "agent", "target").kind, "attack",
     "Bright still drives the testing against the harness");
+});
+
+test("diagram: fuzzing is a self-contained flow with no scan and no write-back to a running app", () => {
+  const m = G.diagramModel({ ...G.defaultState(), runMode: "fuzzing" });
+
+  // No Bright cloud scan: the DAST engine node is omitted entirely.
+  assert.equal(m.nodes.some((n) => n.id === "cloud"), false, "no Bright DAST engine node in fuzzing");
+  // No SARIF input (that is validation-only).
+  assert.equal(m.nodes.some((n) => n.id === "sarif"), false, "no SARIF node in fuzzing");
+  // The functions are wrapped, and the fuzzer node drives them.
+  const target = m.nodes.find((n) => n.id === "target");
+  assert.match(target.t, /harness/i);
+  assert.match(target.d, /wrapped functions/);
+  assert.ok(m.nodes.some((n) => n.id === "fuzzer"), "the fuzzer node is shown");
+
+  // No outbound scan tunnel to the cloud, and nothing crosses the boundary to a
+  // running app: the fuzz loop is entirely inside the runner.
+  assert.equal(edgeBetween(m, "agent", "cloud"), undefined, "no outbound tunnel to Bright in fuzzing");
+  m.edges.forEach((e) => {
+    if (e.to === "target" || e.from === "target" || e.to === "fuzzer" || e.from === "fuzzer") {
+      assert.ok(!e.crosses, `${e.from}->${e.to} must stay inside the runner`);
+    }
+  });
+  // The only crossing writes are code/analysis to the LLM and the PR write-back
+  // to the SCM: never to a running app or a Bright scan.
+  m.edges.filter((e) => e.crosses).forEach((e) => {
+    assert.ok(["llm", "scm"].includes(e.to), `unexpected crossing edge to ${e.to}`);
+  });
+
+  // Every node is connected (no floating nodes) and no dangling edges.
+  const ids = new Set(m.nodes.map((n) => n.id));
+  const touched = new Set(m.edges.flatMap((e) => [e.from, e.to]));
+  m.edges.forEach((e) => assert.ok(ids.has(e.from) && ids.has(e.to), `dangling ${e.from}->${e.to}`));
+  m.nodes.forEach((n) => assert.ok(touched.has(n.id), `${n.id} must be connected`));
+
+  // The model exposes the fuzzing flag next to validation/harness.
+  assert.equal(m.fuzzing, true);
+  assert.equal(m.validation, false);
 });
 
 test("diagram: no node overlaps or dangling edges in any combination", () => {
