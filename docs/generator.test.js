@@ -704,11 +704,11 @@ test("diagram: fuzzing is a self-contained flow with no scan and no write-back t
   assert.match(target.d, /wrapped functions/);
   assert.ok(m.nodes.some((n) => n.id === "fuzzer"), "the fuzzer node is shown");
 
-  // The FUZZER drives the harness, not the agent: the agent only builds them.
+  // The FUZZER drives the harness, not the agent: the agent only builds and
+  // launches the fuzzer (it does not touch the harness directly).
   assert.ok(edgeBetween(m, "fuzzer", "target"), "the fuzzer drives the harness");
   assert.equal(edgeBetween(m, "fuzzer", "target").label, "fuzz inputs");
-  assert.ok(edgeBetween(m, "agent", "target"), "the agent builds the harness");
-  assert.match(edgeBetween(m, "agent", "target").label, /build/i);
+  assert.equal(edgeBetween(m, "agent", "target"), undefined, "the agent does not drive the harness directly");
   assert.match(edgeBetween(m, "agent", "fuzzer").label, /build/i);
   // Faults come back from the fuzzer to the agent for triage; the harness feeds
   // the fuzzer, never the agent directly.

@@ -1213,10 +1213,12 @@
       // the hot loop: the FUZZER drives the harness, feeding it inputs and reading
       // back coverage and crashes. Faults return to the agent for triage into the
       // PR. No traffic leaves the runner and there is no Bright scan.
+      // The agent builds the image (harness + fuzzer) and launches the fuzzer;
+      // it does not touch the harness directly, so there is no agent->harness
+      // edge (it would also cut straight through the fuzzer node between them).
       edges.push({ from: "agent", to: "fuzzer", kind: "control", label: "build · launch" });
-      edges.push({ from: "agent", to: "target", kind: "control", label: "build harness" });
       edges.push({ from: "fuzzer", to: "target", kind: "attack", label: "fuzz inputs" });
-      edges.push({ from: "target", to: "fuzzer", kind: "data", label: "coverage · crashes" });
+      edges.push({ from: "target", to: "fuzzer", kind: "data", label: "coverage · crashes", dy: -14 });
       edges.push({ from: "fuzzer", to: "agent", kind: "data", label: "faults", dy: -14 });
     } else {
       edges.push({ from: "agent", to: "target", kind: "attack",
@@ -1279,13 +1281,20 @@
     // land on the same pixel (and neither do their labels).
     if (dy) { B.l.y += dy; B.r.y += dy; }
 
-    // Same column: straight vertical, label beside the midpoint.
+    // Same column: straight vertical, label beside the midpoint. `labelSide`
+    // lets two anti-parallel edges between the same pair put their labels on
+    // OPPOSITE sides of the line so they never stamp on each other; a small
+    // vertical stagger keeps them clear of the exact midpoint too.
     if (Math.abs(A.cx - B.cx) < 4) {
       const down = B.cy > A.cy;
       const from = down ? A.b : A.t, to = down ? B.t : B.b;
+      const mid = (from.y + to.y) / 2;
+      const side = dy && dy < 0 ? "left" : "right";
       return {
         d: `M${from.x} ${from.y} L${to.x} ${to.y}`,
-        lx: from.x + 8, ly: (from.y + to.y) / 2, anchor: "start",
+        lx: side === "left" ? from.x - 8 : from.x + 8,
+        ly: side === "left" ? mid + 12 : mid - 4,
+        anchor: side === "left" ? "end" : "start",
       };
     }
 
