@@ -67,6 +67,17 @@ INFERENCE_TOKEN="your-inference-token" \
 | `INFERENCE_URL`     | No       | Your inference endpoint. Default: `https://api.openai.com/v1` (OpenAI). Also works with Anthropic (`https://api.anthropic.com`), AWS Bedrock (`https://bedrock-mantle.<region>.api.aws/v1`), Azure OpenAI / Foundry (`https://<resource>.openai.azure.com/openai/v1`), Ollama, or any OpenAI-compatible gateway |
 | `REPOSITORY_URL`    | No       | Repo identity for the PR. Derived from the checkout's `origin` remote if omitted             |
 | `AI_MODEL`          | No       | Model name or comma-separated escalation chain. Default: `gpt-5.4-mini`                      |
+| `RUN_MODE`          | No       | `full` (default): build and start the app and scan, falling back to function-harness mode if startup fails. `dynamic`: full startup only, no harness fallback, fails hard. `function`: skip startup, wrap security-critical functions in a lightweight HTTP harness and scan those. `validation`: validate CodeQL/SARIF findings against live DAST, no fix loop. `fuzzing`: drive the external evolutionary fuzzer against generated per-function harnesses to find crashes, hangs, and memory bugs, with no app startup and no Bright cloud scan. See [Fuzzing mode](#fuzzing-mode) |
+
+> The `FUZZER_*` variables below apply only when `RUN_MODE=fuzzing`.
+
+| Variable            | Required | Description                                                                                  |
+| ------------------- | -------- | -------------------------------------------------------------------------------------------- |
+| `FUZZER_BIN`        | No       | Explicit path to a `fuzzer` binary. If unset, the agent looks for `fuzzer` on `PATH`, then downloads the static linux-x64 release from `NeuraLegion/fuzzer-dist` (sha256-verified) |
+| `FUZZER_VERSION`    | No       | Fuzzer release to download. Defaults to `latest`; set e.g. `0.2.2` to pin                    |
+| `FUZZER_EPOCHS`     | No       | Max evolution epochs per fuzzed function. If unset, sized per-function from the LLM complexity rating (about 150 to 800); setting it overrides that |
+| `FUZZER_TIMEOUT`    | No       | Per-input timeout in seconds; a hang past this is a finding (default: `5`)                   |
+| `FUZZER_MAX_MEMORY` | No       | Per-input peak-memory budget (e.g. `512MB`); exceeding it is a finding. Unset by default     |
 
 Bring your own inference provider — **OpenAI**, **Azure OpenAI / Foundry**,
 **Anthropic (Claude)**, **AWS Bedrock**, **Ollama**, or any OpenAI-compatible
@@ -105,6 +116,22 @@ policy + Service Hook; on GitLab via a note webhook + pipeline trigger; on
 Bitbucket via PR comments).
 See [`examples/ci/README.md`](./examples/ci/README.md) for required secrets and
 runner notes. Run scans on a schedule or on demand — not on every push.
+
+## Fuzzing mode
+
+`RUN_MODE=fuzzing` hunts non-DAST robustness bugs (crashes, hangs, and memory
+blow-ups) in code reachable past input validation. It is self-contained: no app
+startup, no Bright cloud, no repeater, no auth, and no scan loop. It resolves the
+evolutionary fuzzer binary (`FUZZER_BIN`, then `fuzzer` on `PATH`, then downloads
+the static linux-x64 release from `NeuraLegion/fuzzer-dist`, sha256-verified),
+builds a per-function Docker harness, and security-triages the faults so the PR
+carries genuine risks with a reproducing payload. Requires Docker and a Linux x64
+host.
+
+```bash
+# Run from inside a checkout of the repo you want to scan:
+RUN_MODE=fuzzing FUZZER_EPOCHS=500 /path/to/bright-agent-linux-x64
+```
 
 ## Links
 
