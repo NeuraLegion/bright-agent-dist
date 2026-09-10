@@ -1545,16 +1545,22 @@
   function diagramCaption(s) {
     const m = diagramModel(s);
     const bits = [];
-    bits.push("Your application and its source stay on the runner. The agent drives test traffic at the app locally — that traffic never leaves your network.");
+    if (m.fuzzing) {
+      bits.push("Your application and its source stay on the runner. Fuzzing mode never boots the app and runs no Bright scan: the agent wraps security-critical functions in per-function harnesses and drives the evolutionary fuzzer against them entirely on the runner, hunting crashes, hangs, and memory bugs.");
+    } else {
+      bits.push("Your application and its source stay on the runner. The agent drives test traffic at the app locally — that traffic never leaves your network.");
+    }
     bits.push("Every connection outward is initiated from inside your runner over WSS/443, so no inbound firewall port is opened and no address needs allowlisting.");
-    bits.push("Vulnerabilities are found, exploited and re-validated by Bright's DAST engine. "
-      + "The model's job is the engineering around it: understanding the stack, building and booting the app, "
-      + "discovering endpoints, and writing the fixes.");
+    if (!m.fuzzing) {
+      bits.push("Vulnerabilities are found, exploited and re-validated by Bright's DAST engine. "
+        + "The model's job is the engineering around it: understanding the stack, building and booting the app, "
+        + "discovering endpoints, and writing the fixes.");
+    }
     bits.push(m.selfHostedLlm
       ? `That inference runs on ${providerLabel(s)} inside your network, so no code or findings reach a third-party model.`
       : `Code and findings are sent to ${providerLabel(s)} for that reasoning.`);
     if (m.validation) bits.push("Validation mode confirms SARIF findings against the live app and writes nothing back.");
-    if (m.fuzzing) bits.push("Fuzzing mode wraps security-critical functions and drives the evolutionary fuzzer against them entirely on the runner. There is no app boot and no Bright scan, and the faults it finds are triaged into the PR.");
+    if (m.fuzzing) bits.push("The faults the fuzzer finds are security-triaged into the PR, each with a reproducing payload.");
     return bits.join(" ");
   }
 

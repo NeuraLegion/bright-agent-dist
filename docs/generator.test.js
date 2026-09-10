@@ -1119,6 +1119,16 @@ test("diagram: caption states the local-traffic and outbound-only guarantees", (
   assert.match(cap, /no inbound firewall port/);
 });
 
+test("diagram: fuzzing caption describes the fuzzer, not a DAST scan", () => {
+  const cap = G.diagramCaption({ ...G.defaultState(), runMode: "fuzzing" });
+  assert.match(cap, /never boots the app/);
+  assert.match(cap, /no Bright scan/);
+  assert.match(cap, /evolutionary fuzzer/);
+  // Must NOT carry the scan-mode wording that contradicts the fuzzing diagram.
+  assert.ok(!/DAST engine/.test(cap), "no DAST engine in fuzzing caption");
+  assert.ok(!/drives test traffic at the app/.test(cap), "no app test-traffic in fuzzing caption");
+});
+
 test("diagram: attribution — Bright finds, the model engineers", () => {
   const m = G.diagramModel(G.defaultState());
   const agent = m.nodes.find((n) => n.id === "agent");
