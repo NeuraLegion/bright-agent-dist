@@ -48,8 +48,8 @@
   };
 
   const PROVIDERS = {
-    openai:      { t: "OpenAI", url: "https://api.openai.com/v1", model: "gpt-5.4-mini,gpt-5.4" },
-    azure:       { t: "Azure OpenAI / Foundry", url: "https://<resource>.openai.azure.com/openai/v1", model: "gpt-5.4-mini,gpt-5.4" },
+    openai:      { t: "OpenAI", url: "https://api.openai.com/v1", model: "gpt-6-luna,gpt-6.1-sol" },
+    azure:       { t: "Azure OpenAI / Foundry", url: "https://<resource>.openai.azure.com/openai/v1", model: "gpt-6-luna,gpt-6.1-sol" },
     anthropic:   { t: "Anthropic", url: "https://api.anthropic.com/v1", model: "claude-sonnet-5,claude-opus-4-8" },
     bedrock:     { t: "AWS Bedrock", url: "https://bedrock-mantle.us-east-1.api.aws/v1", model: "" },
     ollama:      { t: "Ollama (self-hosted)", url: "http://localhost:11434/v1", model: "llama3.1" },
